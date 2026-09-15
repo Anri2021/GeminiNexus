@@ -40,7 +40,7 @@ public sealed class ChatStreamEndpoint(DatabaseService db, IConfiguration config
 
         // הכנת גוף הבקשה
         var payload = $$"""{"contents":[{"parts":[{"text":"{{req.Prompt}}"}]}]}""";
-        using var requestMsg = new HttpRequestMessage(HttpMethod.Post, url)
+        using var requestMsg = new HttpRequestMessage(System.Net.Http.HttpMethod.Post, url)
         {
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
         };

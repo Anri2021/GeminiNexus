@@ -93,7 +93,7 @@
             var req = new StreamChatRequest(activeSessionId, activeUserId, prompt);
             var content = new StringContent(JsonSerializer.Serialize(req, AppJsonSerializerContext.Default.StreamChatRequest), Encoding.UTF8, "application/json");
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, "http://127.0.0.1:5000/api/chat/stream")
+            using var request = new HttpRequestMessage(HttpMethod.Post, "http://localhost:5000/api/chat/stream")
             {
                 Content = content
             };

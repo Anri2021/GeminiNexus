@@ -46,7 +46,13 @@ public sealed class ChatStreamEndpoint(DatabaseService db, IConfiguration config
         };
 
         using var response = await client.SendAsync(requestMsg, HttpCompletionOption.ResponseHeadersRead, ct);
-        response.EnsureSuccessStatusCode();
+        if (!response.IsSuccessStatusCode)
+        {
+            var errorMsg = await response.Content.ReadAsStringAsync(ct);
+            HttpContext.Response.StatusCode = (int)response.StatusCode;
+            await HttpContext.Response.WriteAsync($"שגיאת Gemini: {errorMsg}", ct);
+            return;
+        }
 
         await using var upstreamStream = await response.Content.ReadAsStreamAsync(ct);
         var pipeReader = PipeReader.Create(upstreamStream);

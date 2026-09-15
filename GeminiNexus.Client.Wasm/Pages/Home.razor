@@ -1,7 +1,181 @@
 ﻿@page "/"
+@inject HttpClient Http
+@using System.Diagnostics
+@using System.Text
+@using System.Text.Json
+@using GeminiNexus.Shared.Contracts
+@using GeminiNexus.UI.Components
+@using Microsoft.AspNetCore.Components.Web.Virtualization
 
-<PageTitle>Home</PageTitle>
+<DexBar Users="users"
+        ActiveUserId="@activeUserId"
+        ActiveSessionId="@activeSessionId"
+        TokensPerSec="@tokensPerSec"
+        LastPromptTokens="@lastPromptTokens"
+        LastCandidateTokens="@lastCandidateTokens"
+        OnUserSelected="HandleUserSelected" />
 
-<h1>Hello, world!</h1>
+<VirtualChatView @ref="virtualChatRef"
+                 LoadMessagesAsync="LoadMessagesAsync"
+                 IsStreaming="@isStreaming"
+                 StreamingContent="@streamingContent" />
 
-Welcome to your new app.
+<ChatInput IsStreaming="@isStreaming"
+           OnSendMessage="SendMessageAsync"
+           OnAbort="AbortStreaming" />
+
+@code {
+    private VirtualChatView? virtualChatRef;
+    private readonly List<UserProfile> users =
+    [
+        new("usr_1", "Henri (ראשי)", ""),
+        new("usr_2", "Dev Profile", "")
+    ];
+
+    private string activeUserId = "usr_1";
+    private string activeSessionId = Guid.NewGuid().ToString("N")[..8];
+    private double tokensPerSec = 0;
+    private int lastPromptTokens = 0;
+    private int lastCandidateTokens = 0;
+
+    private bool isStreaming = false;
+    private string streamingContent = string.Empty;
+    private CancellationTokenSource? cts;
+
+    // מאגר הודעות מקומי לתצוגה וירטואלית חלקה
+    private readonly List<ChatMessage> messages = [];
+
+    private ValueTask<ItemsProviderResult<ChatMessage>> LoadMessagesAsync(ItemsProviderRequest req)
+    {
+        var count = Math.Min(req.Count, Math.Max(0, messages.Count - req.StartIndex));
+        var slice = messages.Skip(req.StartIndex).Take(count).ToList();
+        return ValueTask.FromResult(new ItemsProviderResult<ChatMessage>(slice, messages.Count));
+    }
+
+    private void HandleUserSelected(string userId)
+    {
+        activeUserId = userId;
+        activeSessionId = Guid.NewGuid().ToString("N")[..8];
+        messages.Clear();
+        StateHasChanged();
+    }
+
+    private async Task SendMessageAsync(string prompt)
+    {
+        if (string.IsNullOrWhiteSpace(prompt) || isStreaming) return;
+
+        // 1. הוספת שאלת המשתמש לרשימה המקומית
+        lastPromptTokens = prompt.Length / 4; // הערכת טוקנים לקלט
+        messages.Add(new ChatMessage(
+            messages.Count + 1,
+            activeSessionId,
+            "user",
+            prompt,
+            lastPromptTokens,
+            0,
+            0,
+            0,
+            0,
+            DateTime.UtcNow
+        ));
+
+        isStreaming = true;
+        streamingContent = string.Empty;
+        tokensPerSec = 0;
+        lastCandidateTokens = 0;
+        cts = new CancellationTokenSource();
+        StateHasChanged();
+
+        var sw = Stopwatch.StartNew();
+
+        try
+        {
+            var req = new StreamChatRequest(activeSessionId, activeUserId, prompt);
+            var content = new StringContent(JsonSerializer.Serialize(req, AppJsonSerializerContext.Default.StreamChatRequest), Encoding.UTF8, "application/json");
+
+            using var request = new HttpRequestMessage(HttpMethod.Post, "http://127.0.0.1:5000/api/chat/stream")
+            {
+                Content = content
+            };
+
+            using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
+            response.EnsureSuccessStatusCode();
+
+            await using var stream = await response.Content.ReadAsStreamAsync(cts.Token);
+            using var reader = new StreamReader(stream);
+
+            while (!cts.Token.IsCancellationRequested && await reader.ReadLineAsync(cts.Token) is { } line)
+            {
+                if (string.IsNullOrWhiteSpace(line) || !line.StartsWith("data:")) continue;
+
+                var data = line["data:".Length..].Trim();
+                if (data == "[DONE]") break;
+
+                // פענוח חבילת ה-JSON של Gemini
+                try
+                {
+                    using var doc = JsonDocument.Parse(data);
+                    if (doc.RootElement.TryGetProperty("candidates", out var candidates) &&
+                        candidates.GetArrayLength() > 0 &&
+                        candidates[0].TryGetProperty("content", out var cObj) &&
+                        cObj.TryGetProperty("parts", out var parts) &&
+                        parts.GetArrayLength() > 0 &&
+                        parts[0].TryGetProperty("text", out var textElem))
+                    {
+                        var chunk = textElem.GetString();
+                        if (!string.IsNullOrEmpty(chunk))
+                        {
+                            streamingContent += chunk;
+                            lastCandidateTokens++;
+
+                            var elapsedSec = sw.Elapsed.TotalSeconds;
+                            if (elapsedSec > 0)
+                            {
+                                tokensPerSec = lastCandidateTokens / elapsedSec;
+                            }
+                            StateHasChanged();
+                        }
+                    }
+                }
+                catch (JsonException)
+                {
+                    // התעלמות משברי נתונים בלתי-שלמים ב-Stream
+                }
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // עצירה יזומה
+        }
+        catch (Exception ex)
+        {
+            streamingContent += $"\n[שגיאת תקשורת: {ex.Message}]";
+        }
+        finally
+        {
+            sw.Stop();
+            // 2. שמירת תשובת המודל לרשימה הווירטואלית
+            messages.Add(new ChatMessage(
+                messages.Count + 1,
+                activeSessionId,
+                "model",
+                streamingContent,
+                lastPromptTokens,
+                lastCandidateTokens,
+                0,
+                tokensPerSec,
+                sw.ElapsedMilliseconds,
+                DateTime.UtcNow
+            ));
+
+            isStreaming = false;
+            streamingContent = string.Empty;
+            StateHasChanged();
+        }
+    }
+
+    private void AbortStreaming()
+    {
+        cts?.Cancel();
+    }
+}

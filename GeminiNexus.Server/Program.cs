@@ -3,6 +3,8 @@ using GeminiNexus.Server.Infrastructure;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 
+builder.Services.AddCors(options => options.AddDefaultPolicy(p => p.AllowAnyOrigin().AllowAnyMethod().AllowAnyHeader()));
+
 builder.Services.AddSingleton<DatabaseService>();
 builder.Services.AddHttpClient("GeminiClient", c =>
 {
@@ -16,5 +18,6 @@ var app = builder.Build();
 var db = app.Services.GetRequiredService<DatabaseService>();
 await db.InitializeAsync();
 
+app.UseCors();
 app.UseFastEndpoints();
 app.Run();

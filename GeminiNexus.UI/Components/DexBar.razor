@@ -1,37 +1,62 @@
 ﻿@using GeminiNexus.Shared.Contracts
 
-<div class="dex-bar">
-    <div class="user-selector">
-        <label>פרופיל:</label>
-        <select @onchange="OnUserChanged" class="dex-dropdown">
+<header class="gemini-dex-bar">
+    <div class="dex-left">
+        <div class="brand-title">
+            <svg class="sparkle-icon" viewBox="0 0 24 24">
+                <path d="M12 2L14.5 9.5L22 12L14.5 14.5L12 22L9.5 14.5L2 12L9.5 9.5L12 2Z" />
+            </svg>
+            <span>Gemini Nexus</span>
+        </div>
+
+        <select class="gemini-pill-select" value="@ActiveModel" @onchange="HandleModelChanged">
+            @foreach (var model in AvailableModels)
+            {
+                <option value="@model.Id">@model.DisplayName (@model.ContextLimitDescription)</option>
+            }
+        </select>
+
+        <select class="gemini-pill-select" value="@ActiveUserId" @onchange="HandleUserChanged">
             @foreach (var user in Users)
             {
-                <option value="@user.Id" selected="@(user.Id == ActiveUserId)">@user.DisplayName</option>
+                <option value="@user.Id">@user.DisplayName</option>
             }
         </select>
     </div>
 
-    <div class="metrics-hud">
-        <span class="badge">Session: <strong>@ActiveSessionId</strong></span>
-        <span class="badge">קצב: <strong>@TokensPerSec.ToString("F1") T/s</strong></span>
-        <span class="badge">טוקנים בפרומפט: <strong>@LastPromptTokens</strong></span>
-        <span class="badge">טוקנים בתשובה: <strong>@LastCandidateTokens</strong></span>
-        <span class="badge highlight">מכסת שרת: <strong>תקינה (Free Tier)</strong></span>
+    <div class="dex-right">
+        <div class="metrics-hud">
+            <span class="hud-badge">שיחה: <strong>@ActiveSessionId</strong></span>
+            <span class="hud-badge accent">מהירות: <strong>@TokensPerSec.ToString("F1") T/s</strong></span>
+            <span class="hud-badge">קלט: <strong>@LastPromptTokens</strong></span>
+            <span class="hud-badge">פלט: <strong>@LastCandidateTokens</strong></span>
+            <span class="hud-badge">מצטבר: <strong>@TotalSessionTokens</strong></span>
+        </div>
     </div>
-</div>
+</header>
 
 @code {
     [Parameter] public List<UserProfile> Users { get; set; } = [];
+    [Parameter] public List<ModelDefinition> AvailableModels { get; set; } = [];
     [Parameter] public string ActiveUserId { get; set; } = string.Empty;
+    [Parameter] public string ActiveModel { get; set; } = "gemini-2.5-flash";
     [Parameter] public string ActiveSessionId { get; set; } = string.Empty;
     [Parameter] public double TokensPerSec { get; set; }
     [Parameter] public int LastPromptTokens { get; set; }
     [Parameter] public int LastCandidateTokens { get; set; }
+    [Parameter] public int TotalSessionTokens { get; set; }
     [Parameter] public EventCallback<string> OnUserSelected { get; set; }
+    [Parameter] public EventCallback<string> OnModelSelected { get; set; }
 
-    private async Task OnUserChanged(ChangeEventArgs e)
+    private async Task HandleUserChanged(ChangeEventArgs e)
     {
         if (e.Value is string userId)
             await OnUserSelected.InvokeAsync(userId);
+    }
+
+    private async Task HandleModelChanged(ChangeEventArgs e)
+    {
+        if (e.Value is string modelId)
+            await OnModelSelected.InvokeAsync(modelId);
     }
 }

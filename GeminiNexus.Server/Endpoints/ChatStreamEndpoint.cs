@@ -7,6 +7,7 @@ using System.Buffers;
 using System.Diagnostics;
 using System.IO.Pipelines;
 using System.Text;
+using System.Text.Json;
 
 public sealed class ChatStreamEndpoint(DatabaseService db, IConfiguration config, IHttpClientFactory httpClientFactory)
     : Endpoint<StreamChatRequest>
@@ -27,19 +28,32 @@ public sealed class ChatStreamEndpoint(DatabaseService db, IConfiguration config
             return;
         }
 
-        // הגדרת Header עבור SSE
         HttpContext.Response.Headers.ContentType = "text/event-stream; charset=utf-8";
         HttpContext.Response.Headers.CacheControl = "no-cache";
         HttpContext.Response.Headers.Append("X-Accel-Buffering", "no");
 
         var client = httpClientFactory.CreateClient("GeminiClient");
-        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{req.Model}:streamGenerateContent?alt=sse&key={apiKey}";
+        var model = string.IsNullOrWhiteSpace(req.Model) ? "gemini-2.5-flash" : req.Model;
+        var url = $"https://generativelanguage.googleapis.com/v1beta/models/{model}:streamGenerateContent?alt=sse&key={apiKey}";
 
-        // שמירת פרומפט המשתמש ל-DB
+        // שמירת הודעת המשתמש ל-SQLite
         await db.SaveMessageAsync(new ChatMessage(0, req.SessionId, "user", req.Prompt, 0, 0, 0, 0, 0, DateTime.UtcNow), ct);
 
-        // הכנת גוף הבקשה
-        var payload = $$"""{"contents":[{"parts":[{"text":"{{req.Prompt}}"}]}]}""";
+        // הכנת גוף הבקשה (JSON)
+        var escapedPrompt = JsonEncodedText.Encode(req.Prompt).ToString();
+
+        var genConfig = new StringBuilder();
+        if (req.Temperature.HasValue) genConfig.Append($$""", "temperature": {{req.Temperature.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}}""");
+        if (req.TopP.HasValue) genConfig.Append($$""", "topP": {{req.TopP.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}}""");
+        if (req.TopK.HasValue) genConfig.Append($$""", "topK": {{req.TopK.Value}}""");
+
+        var payload = $$"""
+{
+    "contents": [{"parts": [{"text": "{{escapedPrompt}}"}]}]
+    {{(genConfig.Length > 0 ? $""", "generationConfig": { {genConfig.ToString()[2..]} }""" : "")}}
+}
+""";
+
         using var requestMsg = new HttpRequestMessage(System.Net.Http.HttpMethod.Post, url)
         {
             Content = new StringContent(payload, Encoding.UTF8, "application/json")
@@ -50,7 +64,7 @@ public sealed class ChatStreamEndpoint(DatabaseService db, IConfiguration config
         {
             var errorMsg = await response.Content.ReadAsStringAsync(ct);
             HttpContext.Response.StatusCode = (int)response.StatusCode;
-            await HttpContext.Response.WriteAsync($"שגיאת Gemini: {errorMsg}", ct);
+            await HttpContext.Response.WriteAsync($"שגיאת Gemini API: {errorMsg}", ct);
             return;
         }
 
@@ -59,8 +73,6 @@ public sealed class ChatStreamEndpoint(DatabaseService db, IConfiguration config
         var pipeWriter = PipeWriter.Create(HttpContext.Response.Body);
 
         var stopwatch = Stopwatch.StartNew();
-        var contentAccumulator = new StringBuilder(4096);
-        int candidateTokens = 0;
 
         try
         {
@@ -71,36 +83,18 @@ public sealed class ChatStreamEndpoint(DatabaseService db, IConfiguration config
 
                 if (buffer.IsEmpty && result.IsCompleted) break;
 
-                // הזרמת החבילה ישירות ל-Response Body
                 foreach (var segment in buffer)
                 {
                     pipeWriter.Write(segment.Span);
                 }
 
                 await pipeWriter.FlushAsync(ct);
-                candidateTokens++; // הערכה ראשונית לקצב טוקנים ב-stream
-
                 pipeReader.AdvanceTo(buffer.End);
             }
         }
         finally
         {
             stopwatch.Stop();
-            var tps = stopwatch.Elapsed.TotalSeconds > 0 ? candidateTokens / stopwatch.Elapsed.TotalSeconds : 0;
-
-            // שמירת מענה ה-AI ל-DB
-            await db.SaveMessageAsync(new ChatMessage(
-                0,
-                req.SessionId,
-                "model",
-                contentAccumulator.ToString(),
-                req.Prompt.Length / 4,
-                candidateTokens,
-                0,
-                tps,
-                stopwatch.ElapsedMilliseconds,
-                DateTime.UtcNow
-            ), CancellationToken.None);
         }
     }
 }

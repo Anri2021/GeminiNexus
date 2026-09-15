@@ -8,41 +8,63 @@
 @using Microsoft.AspNetCore.Components.Web.Virtualization
 
 <DexBar Users="users"
+        AvailableModels="models"
         ActiveUserId="@activeUserId"
+        ActiveModel="@activeModel"
         ActiveSessionId="@activeSessionId"
         TokensPerSec="@tokensPerSec"
         LastPromptTokens="@lastPromptTokens"
         LastCandidateTokens="@lastCandidateTokens"
-        OnUserSelected="HandleUserSelected" />
+        TotalSessionTokens="@totalSessionTokens"
+        OnUserSelected="HandleUserSelected"
+        OnModelSelected="HandleModelSelected" />
 
 <VirtualChatView @ref="virtualChatRef"
                  LoadMessagesAsync="LoadMessagesAsync"
                  IsStreaming="@isStreaming"
                  StreamingContent="@streamingContent" />
 
+<InspectorDrawer IsOpen="@isInspectorOpen"
+                 TargetMessage="@inspectedMessage"
+                 OnClose="() => isInspectorOpen = false" />
+
 <ChatInput IsStreaming="@isStreaming"
            OnSendMessage="SendMessageAsync"
            OnAbort="AbortStreaming" />
 
 @code {
+    private bool isInspectorOpen = false;
+    private ChatMessage? inspectedMessage;
+
     private VirtualChatView? virtualChatRef;
+
     private readonly List<UserProfile> users =
     [
         new("usr_1", "Henri (ראשי)", ""),
-        new("usr_2", "Dev Profile", "")
+        new("usr_2", "פרופיל פיתוח", "")
+    ];
+
+    private readonly List<ModelDefinition> models =
+    [
+        new("gemini-2.5-flash", "Gemini 2.5 Flash", "1M Context", 1000000),
+        new("gemini-2.5-pro", "Gemini 2.5 Pro", "2M Context", 2000000),
+        new("gemini-1.5-flash", "Gemini 1.5 Flash", "1M Context", 1000000),
+        new("gemini-1.5-pro", "Gemini 1.5 Pro", "2M Context", 2000000)
     ];
 
     private string activeUserId = "usr_1";
+    private string activeModel = "gemini-2.5-flash";
     private string activeSessionId = Guid.NewGuid().ToString("N")[..8];
+
     private double tokensPerSec = 0;
     private int lastPromptTokens = 0;
     private int lastCandidateTokens = 0;
+    private int totalSessionTokens = 0;
 
     private bool isStreaming = false;
     private string streamingContent = string.Empty;
     private CancellationTokenSource? cts;
 
-    // מאגר הודעות מקומי לתצוגה וירטואלית חלקה
     private readonly List<ChatMessage> messages = [];
 
     private ValueTask<ItemsProviderResult<ChatMessage>> LoadMessagesAsync(ItemsProviderRequest req)
@@ -55,8 +77,22 @@
     private void HandleUserSelected(string userId)
     {
         activeUserId = userId;
+        ResetSession();
+    }
+
+    private void HandleModelSelected(string modelId)
+    {
+        activeModel = modelId;
+    }
+
+    private void ResetSession()
+    {
         activeSessionId = Guid.NewGuid().ToString("N")[..8];
         messages.Clear();
+        lastPromptTokens = 0;
+        lastCandidateTokens = 0;
+        totalSessionTokens = 0;
+        tokensPerSec = 0;
         StateHasChanged();
     }
 
@@ -64,14 +100,12 @@
     {
         if (string.IsNullOrWhiteSpace(prompt) || isStreaming) return;
 
-        // 1. הוספת שאלת המשתמש לרשימה המקומית
-        lastPromptTokens = prompt.Length / 4; // הערכת טוקנים לקלט
         messages.Add(new ChatMessage(
             messages.Count + 1,
             activeSessionId,
             "user",
             prompt,
-            lastPromptTokens,
+            0,
             0,
             0,
             0,
@@ -86,12 +120,21 @@
         cts = new CancellationTokenSource();
         StateHasChanged();
 
-        var sw = Stopwatch.StartNew();
+        var rawJsonBuilder = new StringBuilder();
+        string finishReason = "STOP";
+        string modelVersion = activeModel;
+        string safetySummary = "Normal";
+        string groundingJson = "[]";
+        int cachedTokens = 0;
+        var citationsList = new List<CitationInfo>();
+
+        int streamedChunks = 0;
 
         try
         {
-            var req = new StreamChatRequest(activeSessionId, activeUserId, prompt);
-            var content = new StringContent(JsonSerializer.Serialize(req, AppJsonSerializerContext.Default.StreamChatRequest), Encoding.UTF8, "application/json");
+            var req = new StreamChatRequest(activeSessionId, activeUserId, prompt, activeModel);
+            var jsonPayload = JsonSerializer.Serialize(req, AppJsonSerializerContext.Default.StreamChatRequest);
+            var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
 
             using var request = new HttpRequestMessage(HttpMethod.Post, "http://localhost:5000/api/chat/stream")
             {
@@ -111,50 +154,88 @@
                 var data = line["data:".Length..].Trim();
                 if (data == "[DONE]") break;
 
-                // פענוח חבילת ה-JSON של Gemini
                 try
                 {
-                    using var doc = JsonDocument.Parse(data);
-                    if (doc.RootElement.TryGetProperty("candidates", out var candidates) &&
-                        candidates.GetArrayLength() > 0 &&
-                        candidates[0].TryGetProperty("content", out var cObj) &&
-                        cObj.TryGetProperty("parts", out var parts) &&
-                        parts.GetArrayLength() > 0 &&
-                        parts[0].TryGetProperty("text", out var textElem))
-                    {
-                        var chunk = textElem.GetString();
-                        if (!string.IsNullOrEmpty(chunk))
-                        {
-                            streamingContent += chunk;
-                            lastCandidateTokens++;
+                    rawJsonBuilder = new StringBuilder();
+                    finishReason = "STOP";
+                    modelVersion = activeModel;
+                    safetySummary = "Normal";
+                    groundingJson = "[]";
+                    cachedTokens = 0;
 
-                            var elapsedSec = sw.Elapsed.TotalSeconds;
-                            if (elapsedSec > 0)
-                            {
-                                tokensPerSec = lastCandidateTokens / elapsedSec;
-                            }
-                            StateHasChanged();
-                        }
+                    // בתוך לולאת ה-while (ReadLineAsync):
+                    rawJsonBuilder.AppendLine(data);
+
+                    using var doc = JsonDocument.Parse(data);
+                    var root = doc.RootElement;
+
+                    // 1. גרסת מודל
+                    if (root.TryGetProperty("modelVersion", out var mVer))
+                        modelVersion = mVer.GetString() ?? modelVersion;
+
+                    // 2. בדיקת סיום ובטיחות מתוך candidates[0]
+                    if (root.TryGetProperty("candidates", out var cands) && cands.GetArrayLength() > 0)
+                    {
+                        var firstCand = cands[0];
+                        if (firstCand.TryGetProperty("finishReason", out var fReason))
+                            finishReason = fReason.GetString() ?? finishReason;
+
+                        if (firstCand.TryGetProperty("safetyRatings", out var sRatings))
+                            safetySummary = sRatings.GetRawText();
+
+                        if (firstCand.TryGetProperty("groundingMetadata", out var gMeta))
+                            groundingJson = gMeta.GetRawText();
+                    }
+
+                    // 3. טוקנים ו-Cache
+                    if (root.TryGetProperty("usageMetadata", out var usage))
+                    {
+                        if (usage.TryGetProperty("promptTokenCount", out var pCount))
+                            lastPromptTokens = pCount.GetInt32();
+
+                        if (usage.TryGetProperty("candidatesTokenCount", out var cCount))
+                            lastCandidateTokens = cCount.GetInt32();
+
+                        if (usage.TryGetProperty("cachedContentTokenCount", out var cacheCount))
+                            cachedTokens = cacheCount.GetInt32();
+
+                        if (usage.TryGetProperty("totalTokenCount", out var tCount))
+                            totalSessionTokens += tCount.GetInt32();
                     }
                 }
                 catch (JsonException)
                 {
-                    // התעלמות משברי נתונים בלתי-שלמים ב-Stream
+                    // שברירי Stream לא מעובדים
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            // עצירה יזומה
+            // עצירה בלחיצת כפתור
         }
         catch (Exception ex)
         {
-            streamingContent += $"\n[שגיאת תקשורת: {ex.Message}]";
+            streamingContent += $"\n[שגיאת חיבור: {ex.Message}]";
         }
         finally
         {
             sw.Stop();
-            // 2. שמירת תשובת המודל לרשימה הווירטואלית
+
+            if (lastCandidateTokens == 0)
+                lastCandidateTokens = streamedChunks;
+
+            if (sw.Elapsed.TotalSeconds > 0 && lastCandidateTokens > 0)
+                tokensPerSec = lastCandidateTokens / sw.Elapsed.TotalSeconds;
+
+            var telemetry = new MessageTelemetry(
+                finishReason,
+                modelVersion,
+                cachedTokens,
+                safetySummary,
+                groundingJson,
+                rawJsonBuilder.ToString()
+            );
+
             messages.Add(new ChatMessage(
                 messages.Count + 1,
                 activeSessionId,
@@ -162,10 +243,11 @@
                 streamingContent,
                 lastPromptTokens,
                 lastCandidateTokens,
-                0,
+                cachedTokens,
                 tokensPerSec,
                 sw.ElapsedMilliseconds,
-                DateTime.UtcNow
+                DateTime.UtcNow,
+                telemetry
             ));
 
             isStreaming = false;
@@ -174,8 +256,5 @@
         }
     }
 
-    private void AbortStreaming()
-    {
-        cts?.Cancel();
-    }
+    private void AbortStreaming() => cts?.Cancel();
 }

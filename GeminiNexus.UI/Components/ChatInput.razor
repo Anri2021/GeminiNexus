@@ -1,20 +1,33 @@
-﻿<div class="chat-input-container">
-    <textarea @bind="InputText"
-              @bind:event="oninput"
-              @onkeydown="HandleKeyDown"
-              placeholder="כתוב פרומפט (Shift+Enter לשורה חדשה)..."
-              rows="2"></textarea>
+﻿<div class="gemini-floating-input-zone">
+    <div class="gemini-input-pill">
+        <textarea class="gemini-textarea"
+                  @bind="InputText"
+                  @bind:event="oninput"
+                  @onkeydown="HandleKeyDown"
+                  placeholder="שאל את Gemini..."
+                  rows="1"></textarea>
 
-    <div class="actions">
         @if (IsStreaming)
         {
-            <button class="btn btn-abort" @onclick="OnAbortClicked">עצור הזרמה</button>
+            <button class="gemini-action-btn btn-abort-gemini" @onclick="OnAbortClicked" title="עצור מענה">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                    <rect x="4" y="4" width="16" height="16" rx="2" />
+                </svg>
+            </button>
         }
         else
         {
-            <button class="btn btn-send" @onclick="OnSendClicked">שלח</button>
+            <button class="gemini-action-btn btn-send-gemini"
+                    @onclick="OnSendClicked"
+                    disabled="@string.IsNullOrWhiteSpace(InputText)"
+                    title="שלח">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M2.01 21L23 12L2.01 3L2 10L17 12L2 14L2.01 21Z" />
+                </svg>
+            </button>
         }
     </div>
+    <div class="gemini-disclaimer">Gemini Nexus עשוי להציג מידע לא מדויק, יש לוודא מידע רגיש.</div>
 </div>
 
 @code {
@@ -35,7 +48,7 @@
     private async Task OnSendClicked()
     {
         if (string.IsNullOrWhiteSpace(InputText) || IsStreaming) return;
-        var text = InputText;
+        var text = InputText.Trim();
         InputText = string.Empty;
         await OnSendMessage.InvokeAsync(text);
     }

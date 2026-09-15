@@ -1,94 +1,149 @@
-﻿.dex-bar {
+﻿/* כפתור פתיחת טלמטריה בהודעה */
+.btn-inspect {
+    background: transparent;
+    border: none;
+    color: var(--gemini-accent-blue);
+    cursor: pointer;
+    font-size: 0.75rem;
+    padding: 2px 6px;
+    margin-right: 8px;
+    border-radius: 4px;
+}
+
+    .btn-inspect:hover {
+        background: rgba(168, 199, 250, 0.1);
+    }
+
+/* מסך כהה ברקע */
+.inspector-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+}
+
+/* מגירת האינספקטור */
+.gemini-inspector {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 480px;
+    max-width: 90vw;
+    height: 100vh;
+    background: var(--gemini-surface);
+    border-right: 1px solid var(--gemini-border);
+    z-index: 1001;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 4px 0 24px rgba(0, 0, 0, 0.4);
+    animation: slideIn 0.25s ease-out;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateX(-100%);
+    }
+
+    to {
+        transform: translateX(0);
+    }
+}
+
+.inspector-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #1e1e24;
-    color: #fff;
-    padding: 8px 16px;
-    border-bottom: 1px solid #333;
-}
-
-.metrics-hud .badge {
-    background: #2b2b36;
-    padding: 4px 8px;
-    border-radius: 4px;
-    margin-right: 6px;
-    font-size: 0.82rem;
-}
-
-.badge.highlight {
-    color: #4ade80;
-}
-
-.chat-viewport {
-    height: calc(100vh - 150px);
-    overflow-y: auto;
     padding: 16px;
-    background: #121214;
-    color: #e1e1e6;
+    border-bottom: 1px solid var(--gemini-border);
 }
 
-.message-row {
-    display: flex;
-    margin-bottom: 14px;
-}
-
-.user-row {
-    justify-content: flex-end;
-}
-
-.model-row {
-    justify-content: flex-start;
-}
-
-.message-bubble {
-    max-width: 75%;
-    padding: 10px 14px;
-    border-radius: 8px;
-    background: #202024;
-}
-
-.user-row .message-bubble {
-    background: #00875f;
-    color: #fff;
-}
-
-.meta-footer {
-    font-size: 0.75rem;
-    color: #8d8d99;
-    margin-top: 6px;
-}
-
-.chat-input-container {
-    display: flex;
-    gap: 8px;
-    padding: 12px;
-    background: #1e1e24;
-}
-
-textarea {
-    flex: 1;
-    background: #121214;
-    border: 1px solid #323238;
-    color: #fff;
-    padding: 8px;
-    border-radius: 4px;
-    resize: none;
-}
-
-.btn {
-    padding: 8px 16px;
+.btn-close-drawer {
+    background: transparent;
     border: none;
-    border-radius: 4px;
+    color: var(--gemini-text-secondary);
+    font-size: 1.2rem;
     cursor: pointer;
 }
 
-.btn-send {
-    background: #00875f;
-    color: #fff;
+.inspector-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--gemini-border);
+    background: var(--gemini-surface-variant);
 }
 
-.btn-abort {
-    background: #e53e3e;
-    color: #fff;
+.tab-btn {
+    flex: 1;
+    padding: 10px;
+    background: transparent;
+    border: none;
+    color: var(--gemini-text-secondary);
+    cursor: pointer;
+    font-size: 0.8rem;
+    border-bottom: 2px solid transparent;
+}
+
+    .tab-btn.active {
+        color: var(--gemini-accent-blue);
+        border-bottom-color: var(--gemini-accent-blue);
+        font-weight: 500;
+    }
+
+.inspector-body {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+}
+
+.telemetry-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 12px;
+}
+
+.stat-card {
+    background: var(--gemini-bg);
+    padding: 12px;
+    border-radius: 8px;
+    border: 1px solid var(--gemini-border);
+}
+
+    .stat-card label {
+        display: block;
+        font-size: 0.72rem;
+        color: var(--gemini-text-secondary);
+        margin-bottom: 4px;
+    }
+
+    .stat-card value {
+        font-size: 1.1rem;
+        font-weight: 600;
+        color: var(--gemini-text-primary);
+    }
+
+        .stat-card value.highlight {
+            color: var(--gemini-accent-blue);
+        }
+
+.code-box, .raw-code {
+    background: var(--gemini-bg);
+    padding: 12px;
+    border-radius: 6px;
+    border: 1px solid var(--gemini-border);
+    color: #c9d1d9;
+    font-family: Consolas, monospace;
+    font-size: 0.78rem;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    max-height: 400px;
+}
+
+.btn-copy-raw {
+    background: var(--gemini-surface-variant);
+    color: var(--gemini-text-primary);
+    border: 1px solid var(--gemini-border);
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    margin-bottom: 8px;
+    font-size: 0.75rem;
 }

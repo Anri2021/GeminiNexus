@@ -1,0 +1,37 @@
+﻿@using GeminiNexus.Shared.Contracts
+
+<div class="dex-bar">
+    <div class="user-selector">
+        <label>פרופיל:</label>
+        <select @onchange="OnUserChanged" class="dex-dropdown">
+            @foreach (var user in Users)
+            {
+                <option value="@user.Id" selected="@(user.Id == ActiveUserId)">@user.DisplayName</option>
+            }
+        </select>
+    </div>
+
+    <div class="metrics-hud">
+        <span class="badge">Session: <strong>@ActiveSessionId</strong></span>
+        <span class="badge">קצב: <strong>@TokensPerSec.ToString("F1") T/s</strong></span>
+        <span class="badge">טוקנים בפרומפט: <strong>@LastPromptTokens</strong></span>
+        <span class="badge">טוקנים בתשובה: <strong>@LastCandidateTokens</strong></span>
+        <span class="badge highlight">מכסת שרת: <strong>תקינה (Free Tier)</strong></span>
+    </div>
+</div>
+
+@code {
+    [Parameter] public List<UserProfile> Users { get; set; } = [];
+    [Parameter] public string ActiveUserId { get; set; } = string.Empty;
+    [Parameter] public string ActiveSessionId { get; set; } = string.Empty;
+    [Parameter] public double TokensPerSec { get; set; }
+    [Parameter] public int LastPromptTokens { get; set; }
+    [Parameter] public int LastCandidateTokens { get; set; }
+    [Parameter] public EventCallback<string> OnUserSelected { get; set; }
+
+    private async Task OnUserChanged(ChangeEventArgs e)
+    {
+        if (e.Value is string userId)
+            await OnUserSelected.InvokeAsync(userId);
+    }
+}

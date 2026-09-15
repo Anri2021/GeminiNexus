@@ -1,0 +1,43 @@
+﻿@using GeminiNexus.Shared.Contracts
+@using Microsoft.AspNetCore.Components.Web.Virtualization
+
+<div class="chat-viewport">
+    <Virtualize ItemsProvider="LoadMessagesAsync" Context="msg" OverscanCount="5">
+        <ItemContent>
+            <div class="message-row @(msg.Role == "user" ? "user-row" : "model-row")">
+                <div class="message-bubble">
+                    <div class="role-header">@(msg.Role == "user" ? "אתה" : "Gemini")</div>
+                    <div class="message-content">@msg.Content</div>
+
+                    @if (msg.Role == "model")
+                    {
+                        <div class="meta-footer">
+                            <span>@msg.TokensPerSecond.ToString("F1") T/s</span>
+                            <span> | זמן: @(msg.ElapsedMilliseconds)ms</span>
+                            <span> | Tokens: @msg.CandidateTokens</span>
+                        </div>
+                    }
+                </div>
+            </div>
+        </ItemContent>
+        <Placeholder>
+            <div class="message-loading">טוען נתונים באפס הקצאות...</div>
+        </Placeholder>
+    </Virtualize>
+
+    @if (IsStreaming)
+    {
+        <div class="message-row model-row streaming">
+            <div class="message-bubble">
+                <div class="role-header">Gemini (מזרים נתונים...)</div>
+                <div class="message-content">@StreamingContent</div>
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public Func<ItemsProviderRequest, ValueTask<ItemsProviderResult<ChatMessage>>> LoadMessagesAsync { get; set; } = default!;
+    [Parameter] public bool IsStreaming { get; set; }
+    [Parameter] public string StreamingContent { get; set; } = string.Empty;
+}

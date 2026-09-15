@@ -2,7 +2,7 @@
 @using Microsoft.AspNetCore.Components.Web.Virtualization
 
 <div class="chat-viewport">
-    <Virtualize ItemsProvider="LoadMessagesAsync" Context="msg" OverscanCount="5">
+    <Virtualize Context="msg" ItemsProvider="LoadMessagesAsync" OverscanCount="5" TItem="ChatMessage">
         <ItemContent>
             <div class="message-row @(msg.Role == "user" ? "user-row" : "model-row")">
                 <div class="message-bubble">

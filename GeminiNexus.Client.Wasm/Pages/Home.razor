@@ -139,6 +139,13 @@
 
         var sw = Stopwatch.StartNew();
 
+        var rawJsonBuilder = new StringBuilder();
+        string finishReason = "STOP";
+        string modelVersion = activeModel;
+        string safetySummary = "Normal";
+        string groundingJson = "[]";
+        int cachedTokens = 0;
+
         var citationsList = new List<CitationInfo>();
 
         int streamedChunks = 0;

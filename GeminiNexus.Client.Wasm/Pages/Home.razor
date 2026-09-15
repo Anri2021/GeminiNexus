@@ -22,7 +22,8 @@
 <VirtualChatView @ref="virtualChatRef"
                  LoadMessagesAsync="LoadMessagesAsync"
                  IsStreaming="@isStreaming"
-                 StreamingContent="@streamingContent" />
+                 StreamingContent="@streamingContent"
+                 OnInspectRequested="OpenInspector" />
 
 <InspectorDrawer IsOpen="@isInspectorOpen"
                  TargetMessage="@inspectedMessage"
@@ -34,7 +35,7 @@
 
 @code {
     private bool isInspectorOpen = false;
-    private ChatMessage? inspectedMessage;
+    private ChatMessage? inspectedMessage= null;
 
     private VirtualChatView? virtualChatRef;
 
@@ -100,12 +101,28 @@
     {
         if (string.IsNullOrWhiteSpace(prompt) || isStreaming) return;
 
+        // ספירת טוקנים רשמית מהשרת עבור הפרומפט
+        try
+        {
+            var countReq = new CountTokensRequest(activeModel, prompt);
+            var countRes = await Http.PostAsJsonAsync("http://localhost:5000/api/chat/count-tokens", countReq, AppJsonSerializerContext.Default.CountTokensRequest);
+            if (countRes.IsSuccessStatusCode)
+            {
+                var resObj = await countRes.Content.ReadFromJsonAsync(AppJsonSerializerContext.Default.CountTokensResponse);
+                lastPromptTokens = resObj.TotalTokens;
+            }
+        }
+        catch
+        {
+            lastPromptTokens = prompt.Length / 4;
+        }
+
         messages.Add(new ChatMessage(
             messages.Count + 1,
             activeSessionId,
             "user",
             prompt,
-            0,
+            lastPromptTokens,
             0,
             0,
             0,
@@ -120,12 +137,8 @@
         cts = new CancellationTokenSource();
         StateHasChanged();
 
-        var rawJsonBuilder = new StringBuilder();
-        string finishReason = "STOP";
-        string modelVersion = activeModel;
-        string safetySummary = "Normal";
-        string groundingJson = "[]";
-        int cachedTokens = 0;
+        var sw = Stopwatch.StartNew();
+
         var citationsList = new List<CitationInfo>();
 
         int streamedChunks = 0;
@@ -137,9 +150,9 @@
             var content = new StringContent(jsonPayload, Encoding.UTF8, "application/json");
 
             using var request = new HttpRequestMessage(HttpMethod.Post, "http://localhost:5000/api/chat/stream")
-            {
-                Content = content
-            };
+                {
+                    Content = content
+                };
 
             using var response = await Http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, cts.Token);
             response.EnsureSuccessStatusCode();
@@ -156,27 +169,41 @@
 
                 try
                 {
-                    rawJsonBuilder = new StringBuilder();
-                    finishReason = "STOP";
-                    modelVersion = activeModel;
-                    safetySummary = "Normal";
-                    groundingJson = "[]";
-                    cachedTokens = 0;
-
-                    // בתוך לולאת ה-while (ReadLineAsync):
                     rawJsonBuilder.AppendLine(data);
 
                     using var doc = JsonDocument.Parse(data);
                     var root = doc.RootElement;
 
-                    // 1. גרסת מודל
+                    // 1. גרסת מודל משרתי Google
                     if (root.TryGetProperty("modelVersion", out var mVer))
                         modelVersion = mVer.GetString() ?? modelVersion;
 
-                    // 2. בדיקת סיום ובטיחות מתוך candidates[0]
+                    // 2. חילוץ טקסט שוטף, סיבת סיום, בטיחות וציטוטים
                     if (root.TryGetProperty("candidates", out var cands) && cands.GetArrayLength() > 0)
                     {
                         var firstCand = cands[0];
+
+                        // הזרמת תוכן הטקסט למסך
+                        if (firstCand.TryGetProperty("content", out var cObj) &&
+                            cObj.TryGetProperty("parts", out var parts) &&
+                            parts.GetArrayLength() > 0 &&
+                            parts[0].TryGetProperty("text", out var textElem))
+                        {
+                            var chunk = textElem.GetString();
+                            if (!string.IsNullOrEmpty(chunk))
+                            {
+                                streamingContent += chunk;
+                                streamedChunks++;
+
+                                var elapsedSec = sw.Elapsed.TotalSeconds;
+                                if (elapsedSec > 0)
+                                {
+                                    tokensPerSec = streamedChunks / elapsedSec;
+                                }
+                                StateHasChanged();
+                            }
+                        }
+
                         if (firstCand.TryGetProperty("finishReason", out var fReason))
                             finishReason = fReason.GetString() ?? finishReason;
 
@@ -185,9 +212,25 @@
 
                         if (firstCand.TryGetProperty("groundingMetadata", out var gMeta))
                             groundingJson = gMeta.GetRawText();
+
+                        // שליפת מקורות ורישיונות קוד
+                        if (firstCand.TryGetProperty("citationMetadata", out var cMeta) &&
+                            cMeta.TryGetProperty("citationSources", out var cSources) &&
+                            cSources.ValueKind == JsonValueKind.Array)
+                        {
+                            citationsList.Clear();
+                            foreach (var src in cSources.EnumerateArray())
+                            {
+                                var uri = src.TryGetProperty("uri", out var u) ? u.GetString() : null;
+                                var lic = src.TryGetProperty("license", out var l) ? l.GetString() : null;
+                                var start = src.TryGetProperty("startIndex", out var s) ? s.GetInt32() : 0;
+                                var end = src.TryGetProperty("endIndex", out var e) ? e.GetInt32() : 0;
+                                citationsList.Add(new CitationInfo(uri, lic, start, end));
+                            }
+                        }
                     }
 
-                    // 3. טוקנים ו-Cache
+                    // 3. חילוץ טוקנים מדויקים מ-usageMetadata של גוגל
                     if (root.TryGetProperty("usageMetadata", out var usage))
                     {
                         if (usage.TryGetProperty("promptTokenCount", out var pCount))
@@ -205,13 +248,13 @@
                 }
                 catch (JsonException)
                 {
-                    // שברירי Stream לא מעובדים
+                    // התעלמות משברי נתונים בלתי-שלמים ב-Stream
                 }
             }
         }
         catch (OperationCanceledException)
         {
-            // עצירה בלחיצת כפתור
+            // עצירה יזומה
         }
         catch (Exception ex)
         {
@@ -228,26 +271,27 @@
                 tokensPerSec = lastCandidateTokens / sw.Elapsed.TotalSeconds;
 
             var telemetry = new MessageTelemetry(
-                finishReason,
-                modelVersion,
-                cachedTokens,
-                safetySummary,
-                groundingJson,
-                rawJsonBuilder.ToString()
+            finishReason,
+            modelVersion,
+            cachedTokens,
+            safetySummary,
+            groundingJson,
+            rawJsonBuilder.ToString(),
+            citationsList
             );
 
             messages.Add(new ChatMessage(
-                messages.Count + 1,
-                activeSessionId,
-                "model",
-                streamingContent,
-                lastPromptTokens,
-                lastCandidateTokens,
-                cachedTokens,
-                tokensPerSec,
-                sw.ElapsedMilliseconds,
-                DateTime.UtcNow,
-                telemetry
+            messages.Count + 1,
+            activeSessionId,
+            "model",
+            streamingContent,
+            lastPromptTokens,
+            lastCandidateTokens,
+            cachedTokens,
+            tokensPerSec,
+            sw.ElapsedMilliseconds,
+            DateTime.UtcNow,
+            telemetry
             ));
 
             isStreaming = false;
@@ -257,4 +301,10 @@
     }
 
     private void AbortStreaming() => cts?.Cancel();
+
+    private void OpenInspector(ChatMessage msg)
+    {
+        inspectedMessage = msg;
+        isInspectorOpen = true;
+    }
 }

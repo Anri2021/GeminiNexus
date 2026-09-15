@@ -43,14 +43,18 @@ public sealed class ChatStreamEndpoint(DatabaseService db, IConfiguration config
         var escapedPrompt = JsonEncodedText.Encode(req.Prompt).ToString();
 
         var genConfig = new StringBuilder();
-        if (req.Temperature.HasValue) genConfig.Append($$""", "temperature": {{req.Temperature.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}}""");
-        if (req.TopP.HasValue) genConfig.Append($$""", "topP": {{req.TopP.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}}""");
-        if (req.TopK.HasValue) genConfig.Append($$""", "topK": {{req.TopK.Value}}""");
+        if (req.Temperature.HasValue) genConfig.Append($", \"temperature\": {req.Temperature.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}");
+        if (req.TopP.HasValue) genConfig.Append($", \"topP\": {req.TopP.Value.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)}");
+        if (req.TopK.HasValue) genConfig.Append($", \"topK\": {req.TopK.Value}");
+
+        var configSection = genConfig.Length > 0
+            ? $", \"generationConfig\": {{ {genConfig.ToString()[2..]} }}"
+            : string.Empty;
 
         var payload = $$"""
 {
     "contents": [{"parts": [{"text": "{{escapedPrompt}}"}]}]
-    {{(genConfig.Length > 0 ? $""", "generationConfig": { {genConfig.ToString()[2..]} }""" : "")}}
+    {{configSection}}
 }
 """;
 

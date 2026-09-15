@@ -28,12 +28,14 @@ public sealed class CountTokensEndpoint(IConfiguration config, IHttpClientFactor
         using var response = await client.PostAsync(url, content, ct);
         if (!response.IsSuccessStatusCode)
         {
-            await HttpContext.Response.WriteAsJsonAsync(new CountTokensResponse(req.Prompt.Length / 4), AppJsonSerializerContext.Default.CountTokensResponse, ct);
+            HttpContext.Response.ContentType = "application/json; charset=utf-8";
+            await JsonSerializer.SerializeAsync(HttpContext.Response.Body, new CountTokensResponse(req.Prompt.Length / 4), AppJsonSerializerContext.Default.CountTokensResponse, ct);
             return;
         }
 
         using var doc = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(ct), cancellationToken: ct);
         int count = doc.RootElement.TryGetProperty("totalTokens", out var prop) ? prop.GetInt32() : req.Prompt.Length / 4;
-        await HttpContext.Response.WriteAsJsonAsync(new CountTokensResponse(count), AppJsonSerializerContext.Default.CountTokensResponse, ct);
+        HttpContext.Response.ContentType = "application/json; charset=utf-8";
+        await JsonSerializer.SerializeAsync(HttpContext.Response.Body, new CountTokensResponse(count), AppJsonSerializerContext.Default.CountTokensResponse, ct);
     }
 }

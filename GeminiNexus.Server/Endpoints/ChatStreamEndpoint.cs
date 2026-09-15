@@ -22,7 +22,8 @@ public sealed class ChatStreamEndpoint(DatabaseService db, IConfiguration config
         var apiKey = config["Gemini:ApiKey"] ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY");
         if (string.IsNullOrEmpty(apiKey))
         {
-            await SendStringAsync("Error: Gemini API Key not configured.", 500, cancellation: ct);
+            HttpContext.Response.StatusCode = 500;
+            await HttpContext.Response.WriteAsync("Error: Gemini API Key not configured.", ct);
             return;
         }
 

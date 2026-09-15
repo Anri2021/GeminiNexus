@@ -7,7 +7,8 @@
       "launchBrowser": true,
       "applicationUrl": "http://localhost:5242",
       "environmentVariables": {
-        "ASPNETCORE_ENVIRONMENT": "Development"
+        "ASPNETCORE_ENVIRONMENT": "Development",
+        "GEMINI_API_KEY": "AQ.Ab8RN6Ka1AKIDrysbRkPfE0wc1p-1R52xChsvmDxJY2j8do5CQ"
       }
     },
     "https": {

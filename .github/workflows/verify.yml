@@ -50,4 +50,4 @@ jobs:
         with:
           global-json-file: global.json
       - run: dotnet workload install maui-windows --skip-manifest-update
-      - run: dotnet build GeminiNexus.Client.Maui -c Release -f net11.0-windows10.0.19041.0 -p:TargetFrameworks=net11.0-windows10.0.19041.0
+      - run: dotnet build GeminiNexus.Client.Maui -c Release -f net11.0-windows10.0.19041.0 -p:NexusMauiTargets=net11.0-windows10.0.19041.0

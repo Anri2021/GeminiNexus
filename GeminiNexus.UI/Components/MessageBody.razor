@@ -1,0 +1,21 @@
+@foreach(var block in blocks)
+{
+    @if(!block.Code)
+    {<div class="markdown-body" dir="auto">@((MarkupString)SafeMarkdown.Render(block.Text))</div>}
+    else
+    {<div class="code-block"><div class="code-head"><span>@Language(block.Text)</span><button @onclick="()=>Copy(Code(block.Text))">העתקה</button></div><pre dir="ltr"><code>@Code(block.Text)</code></pre></div>}
+}
+@code {
+    [Parameter] public string Content {get;set;}="";
+    [Inject] public IJSRuntime JS {get;set;}=default!;
+    private (string Text,bool Code)[] blocks=[];
+    private string? previous;
+    protected override void OnParametersSet()
+    {
+        if(previous==Content)return;previous=Content;
+        blocks=Content.Split("```").Select((text,index)=>(text,index%2==1)).ToArray();
+    }
+    private static string Language(string text)=>text.Contains('\n')?text[..text.IndexOf('\n')].Trim():"קוד";
+    private static string Code(string text)=>text.Contains('\n')?text[(text.IndexOf('\n')+1)..]:text;
+    private async Task Copy(string text)=>await JS.InvokeVoidAsync("navigator.clipboard.writeText",text);
+}

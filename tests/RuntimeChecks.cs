@@ -1,0 +1,78 @@
+using System.Net;
+using System.Net.Http.Json;
+using System.Text;
+using System.Text.Json;
+using GeminiNexus.Shared;
+using GeminiNexus.Server.Providers;
+using GeminiNexus.Server.Application;
+using GeminiNexus.Server.Domain;
+using GeminiNexus.UI.Services;
+using Microsoft.AspNetCore.Components;
+using Microsoft.AspNetCore.Components.Web;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.JSInterop;
+
+var count=0;
+void Check(bool value,string name){if(!value)throw new Exception(name);Console.WriteLine("PASS "+name);count++;}
+var html=SafeMarkdown.Render("# Title\n**bold** and `code`\n<script>alert(1)</script>\n[x](javascript:alert(1))\n[x](https://example.com/\"bad)");
+Check(html.Contains("<h1>Title</h1>")&&html.Contains("<strong>bold</strong>"),"Markdown formatting");
+Check(!html.Contains("<script>")&&!html.Contains("href=\"javascript:")&&!html.Contains("/\"bad"),"Markdown XSS encoding");
+var changed=PluginEngine.Apply("input","",[new("a","prefix","prefix","1","server",true,"{\"text\":\"first\"}")],"server");
+Check(changed.Prompt=="first\ninput","Portable plugin execution");
+var events=new List<string>();
+await foreach(var raw in SseReader.Read(new OneByteStream(Encoding.UTF8.GetBytes("data: {\"text\":\"שלום\"}\r\n\r\ndata: [DONE]\n\n")),4096,default))events.Add(raw);
+Check(events.Count==1&&events[0].Contains("שלום"),"SSE fragmented multibyte UTF-8");
+var rejected=false;
+try{await foreach(var raw in SseReader.Read(new MemoryStream(Encoding.UTF8.GetBytes("data: "+new string('x',8192))),4096,default)){} }catch(WorkspaceException){rejected=true;}
+Check(rejected,"SSE byte limit before newline");
+events.Clear();await foreach(var raw in SseReader.Read(new MemoryStream(Encoding.UTF8.GetBytes("data: {}")),4096,default))events.Add(raw);
+Check(events.Count==0,"Incomplete SSE event is not committed");
+rejected=false;try{JsonSerializer.Deserialize("{\"name\":null,\"password\":\"x\"}",NexusJson.Default.LoginRequest);}catch(JsonException){rejected=true;}
+Check(rejected,"Null authentication field rejected");
+var trace=TraceRedactor.Redact("{\"nested\":{\"authorization\":\"secret\"},\"text\":\"fixture-key\"}","fixture-key");
+Check(!trace.Contains("secret")&&!trace.Contains("fixture-key"),"Trace secret redaction");
+var parsed=GeminiProvider.Parse("{\"candidates\":[{\"index\":0,\"content\":{\"parts\":[{\"text\":\"private\",\"thought\":true},{\"text\":\"visible\",\"thoughtSignature\":\"signature\"}]},\"finishReason\":\"STOP\"},{\"index\":1,\"content\":{\"parts\":[{\"text\":\"alternative\"}]}}],\"unknown\":true}");
+Check(parsed.Text=="visible"&&parsed.PartsJson.Contains("signature")&&parsed.RawJson.Contains("alternative"),"All raw candidates retained; thought parts excluded from visible text");
+var services=new ServiceCollection().AddLogging().AddSingleton<IJSRuntime,NoJs>().AddSingleton(new HttpClient(new Fixture()){BaseAddress=new Uri("https://fixture.invalid/")}).AddSingleton<WorkspaceClient>().BuildServiceProvider();
+await using(var renderer=new HtmlRenderer(services,services.GetRequiredService<ILoggerFactory>()))
+{
+    await renderer.Dispatcher.InvokeAsync(async()=>
+    {
+        var output=await renderer.RenderComponentAsync<GeminiNexus.UI.Pages.Workspace>();
+        var markup=output.ToHtmlString();Check(markup.Contains("nexus-app")&&markup.Contains("composer")&&markup.Contains("sidebar"),"Real workspace Razor renders");
+        if(args.Length>0)
+        {
+            var directory=Path.Combine(args[0],"artifacts","checks");Directory.CreateDirectory(directory);
+            var css=File.ReadAllText(Path.Combine(args[0],"GeminiNexus.UI","wwwroot","workspace.css"));
+            File.WriteAllText(Path.Combine(directory,"workspace.html"),"<!doctype html><html lang=\"he\" dir=\"rtl\"><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><style>"+css+"</style>"+markup+"</html>");
+        }
+    });
+}
+Console.WriteLine($"{count} source checks passed");
+sealed class OneByteStream(byte[] bytes):MemoryStream(bytes)
+{
+    public override ValueTask<int> ReadAsync(Memory<byte> buffer,CancellationToken ct=default)=>base.ReadAsync(buffer[..Math.Min(1,buffer.Length)],ct);
+}
+sealed class NoJs:IJSRuntime
+{
+    public ValueTask<T> InvokeAsync<T>(string name,object?[]? args)=>ValueTask.FromResult(default(T)!);
+    public ValueTask<T> InvokeAsync<T>(string name,CancellationToken ct,object?[]? args)=>ValueTask.FromResult(default(T)!);
+}
+sealed class Fixture:HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request,CancellationToken ct)
+    {
+        var content=request.RequestUri!.AbsolutePath switch
+        {
+            "/api/auth/me"=>JsonContent.Create(new UserInfo("fixture-user","אנרי"),NexusJson.Default.UserInfo),
+            "/api/settings"=>JsonContent.Create(new WorkspaceSettings(),NexusJson.Default.WorkspaceSettings),
+            "/api/plugins"=>JsonContent.Create(new PluginList([]),NexusJson.Default.PluginList),
+            "/api/limits"=>JsonContent.Create(new UploadLimit(8388608,100000),NexusJson.Default.UploadLimit),
+            "/api/models"=>JsonContent.Create(new ModelCatalog([new("test-model","Gemini · בדיקה",100000,8000,["generateContent"])]),NexusJson.Default.ModelCatalog),
+            "/api/conversations"=>JsonContent.Create(new ConversationPage([],null),NexusJson.Default.ConversationPage),
+            "/api/runs"=>JsonContent.Create(Array.Empty<Run>(),NexusJson.Default.RunArray),
+            _=>throw new Exception("Unexpected fixture route")
+        };
+        return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK){Content=content});
+    }
+}

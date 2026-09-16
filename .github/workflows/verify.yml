@@ -1,0 +1,41 @@
+name: Verify workspace
+on:
+  push:
+    branches: [master, 'codex/**']
+  pull_request:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  web-and-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Publish server and WebAssembly
+        run: bash scripts/publish.sh
+      - name: Server integration contracts
+        run: python tests/integration.py
+      - name: Source and rendering checks
+        run: python tests/source_checks.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-publish
+          path: artifacts/publish
+          retention-days: 7
+  maui-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet workload install maui-windows --skip-manifest-update
+      - run: dotnet build GeminiNexus.Client.Maui -c Release -f net11.0-windows10.0.19041.0 -p:TargetFrameworks=net11.0-windows10.0.19041.0

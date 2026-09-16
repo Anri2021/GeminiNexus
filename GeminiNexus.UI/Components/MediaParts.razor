@@ -1,0 +1,29 @@
+@if(media.Count>0)
+{
+    <details class="message-media"><summary>קבצים ומדיה (@media.Count)</summary>
+        @foreach(var part in media)
+        {
+            @if(part.Mime is "image/png" or "image/jpeg" or "image/webp" or "image/gif")
+            {<img src="@part.Source" alt="תמונה בשיחה" loading="lazy" />}
+            else if(part.Mime is "audio/mpeg" or "audio/wav" or "audio/ogg")
+            {<audio controls preload="none" src="@part.Source"></audio>}
+            else{<p class="muted">@part.Mime · הנתונים זמינים בחלונית בדיקת הריצה</p>}
+        }
+    </details>
+}
+@code {
+    [Parameter] public string PartsJson {get;set;}="[]";
+    private readonly List<(string Mime,string Source)> media=[];private string? previous;
+    protected override void OnParametersSet()
+    {
+        if(previous==PartsJson)return;previous=PartsJson;media.Clear();
+        try
+        {
+            using var doc=JsonDocument.Parse(PartsJson);
+            foreach(var part in doc.RootElement.EnumerateArray())
+                if(part.TryGetProperty("inlineData",out var data)&&data.TryGetProperty("mimeType",out var mime)&&data.TryGetProperty("data",out var bytes))
+                {var type=mime.GetString()??"application/octet-stream";media.Add((type,$"data:{type};base64,{bytes.GetString()}"));}
+        }
+        catch(JsonException){}
+    }
+}

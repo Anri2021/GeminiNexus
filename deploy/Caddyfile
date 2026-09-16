@@ -1,0 +1,28 @@
+{$NEXUS_DOMAIN} {
+    encode zstd gzip
+    header {
+        X-Content-Type-Options nosniff
+        Referrer-Policy strict-origin-when-cross-origin
+        X-Frame-Options DENY
+        Content-Security-Policy "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' data: blob:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'"
+        -Server
+    }
+    handle /api/* {
+        reverse_proxy 127.0.0.1:5000
+    }
+    handle /health/* {
+        reverse_proxy 127.0.0.1:5000
+    }
+    handle {
+        root * /srv/gemininexus/client/wwwroot
+        @assets path /_framework/* /_content/*
+        handle @assets {
+            file_server
+        }
+        handle {
+            header Cache-Control no-cache
+            try_files {path} /index.html
+            file_server
+        }
+    }
+}

@@ -1,0 +1,30 @@
+[Unit]
+Description=Gemini Nexus API
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=gemininexus
+Group=gemininexus
+WorkingDirectory=/srv/gemininexus/server
+ExecStart=/usr/bin/dotnet /srv/gemininexus/server/GeminiNexus.Server.dll
+EnvironmentFile=/etc/gemininexus/server.env
+Environment=ASPNETCORE_ENVIRONMENT=Production
+Environment=Urls=http://127.0.0.1:5000
+Environment=Database__ConnectionString="Data Source=/var/lib/gemininexus/nexus.db;Default Timeout=15"
+Environment=Auth__KeyPath=/var/lib/gemininexus/keys
+StateDirectory=gemininexus
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/gemininexus
+
+[Install]
+WantedBy=multi-user.target

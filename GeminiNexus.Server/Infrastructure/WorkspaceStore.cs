@@ -131,13 +131,22 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
     public async Task<MessagePage> Messages(string owner,string conversation,long? before,int take,CancellationToken ct)
     {
         await using var db=await Open(ct);await RequireOwner(db,owner,conversation,ct);take=Math.Clamp(take,1,100);
-        var list=await ReadMessages(db,conversation,before,take+1,ct);var more=list.Count>take;if(more)list.RemoveAt(list.Count-1);list.Reverse();
+        var list=await ReadMessages(db,conversation,before,take+1,ct);
+        var more=list.Count>take||list.Count>1&&list.Sum(m=>(long)(m.Content.Length+m.PartsJson.Length)*2)>=options.MaxHistoryBytes;
+        if(more)list.RemoveAt(list.Count-1);list.Reverse();
         return new(list.ToArray(),more,list.Count>0?list[0].Ordinal:null);
     }
-    private static async Task<List<Message>> ReadMessages(DbConnection db,string id,long? before,int take,CancellationToken ct,DbTransaction? tx=null)
+    private async Task<List<Message>> ReadMessages(DbConnection db,string id,long? before,int take,CancellationToken ct,DbTransaction? tx=null)
     {
         await using var cmd=Command(db,"SELECT Id,ConversationId,RunId,Ordinal,Role,Content,PartsJson,CreatedAt,Status FROM Messages WHERE ConversationId=@id AND Ordinal<@before ORDER BY Ordinal DESC LIMIT @take",tx,("id",id),("before",before??long.MaxValue),("take",take));
-        var list=new List<Message>();await using var r=await cmd.ExecuteReaderAsync(ct);while(await r.ReadAsync(ct))list.Add(MessageFrom(r));return list;
+        var list=new List<Message>();long bytes=0;await using var r=await cmd.ExecuteReaderAsync(ct);
+        while(await r.ReadAsync(ct))
+        {
+            var message=MessageFrom(r);list.Add(message);bytes+=(long)(message.Content.Length+message.PartsJson.Length)*2;
+            // Includes one look-ahead row so pagination can report additional history.
+            if(bytes>=options.MaxHistoryBytes&&list.Count>1)break;
+        }
+        return list;
     }
     public async Task<Conversation> Fork(string owner,string id,string messageId,CancellationToken ct,bool before=false)
     {

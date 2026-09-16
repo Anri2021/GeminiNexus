@@ -14,6 +14,7 @@ public sealed class ServerOptions(IConfiguration config)
     public int MaxAttachmentBytes { get; } = Read(config, "Limits:MaxAttachmentBytes", 8388608, 1024, 16777216);
     public int MaxTraceBytes { get; } = Read(config, "Limits:MaxTraceBytes", 16777216, 4096, 134217728);
     public int TraceRetentionDays { get; } = Read(config, "Limits:TraceRetentionDays", 14, 1, 3650);
+    public int MaxHistoryBytes { get; } = Read(config,"Limits:MaxHistoryBytes",33554432,1048576,134217728);
     public int MaxEventBytes { get; } = Read(config, "Limits:MaxEventBytes", 4194304, 4096, 16777216);
     public string DefaultModel { get; } = config["Gemini:DefaultModel"] ?? "gemini-3.8-flash";
     public string ApiKey { get; } = ReadSecret(config, "Gemini:ApiKey", "Gemini:ApiKeyFile");

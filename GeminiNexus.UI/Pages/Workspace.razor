@@ -131,6 +131,7 @@ else
 </div>
 
 @code {
+    private SubmitRun? pendingRequest;
     private UserInfo? user;private bool loading=true,busy,sidebarOpen,hasMore,loadingHistory,loadingConversations;private string? error,panel,conversationCursor;
     private string loginName="admin",password="",search="",prompt="",model="gemini-3.8-flash",streaming="";
     private List<Conversation> conversations=[];private List<Message> messages=[];private Run[] runs=[];private ModelInfo[] models=[];private Conversation? active;private Run? currentRun;
@@ -156,7 +157,7 @@ else
         if(setupNeeded&&user is not null){setupNeeded=false;await module.InvokeVoidAsync("setup",reference,settings.RenderIntervalMs);}
     }
     private async Task Login()=>await Guard(async()=>{busy=true;try{user=await Api.Send(HttpMethod.Post,"auth/login",new LoginRequest(loginName,password),NexusJson.Default.LoginRequest,NexusJson.Default.UserInfo);password="";await InitializeWorkspace();}finally{busy=false;}});
-    private async Task Logout()=>await Guard(async()=>{await Api.Action(HttpMethod.Post,"auth/logout");selection?.Cancel();searchCancel?.Cancel();user=null;active=null;currentRun=null;streaming="";prompt="";attachments.Clear();conversations.Clear();plugins=new([]);debugEvents.Clear();panel=null;messages.Clear();runs=[];if(module is not null)await module.InvokeVoidAsync("disconnect");});
+    private async Task Logout()=>await Guard(async()=>{await Api.Action(HttpMethod.Post,"auth/logout");selection?.Cancel();searchCancel?.Cancel();pendingRequest=null;user=null;active=null;currentRun=null;streaming="";prompt="";attachments.Clear();conversations.Clear();plugins=new([]);debugEvents.Clear();panel=null;messages.Clear();runs=[];if(module is not null)await module.InvokeVoidAsync("disconnect");});
     private async Task Guard(Func<Task> action){try{error=null;await action();}catch(OperationCanceledException){}catch(Exception ex){error=ex.Message;}await InvokeAsync(StateHasChanged);}
     private async Task ReloadConversations(){var query=search;var page=await Api.Get("conversations?take="+settings.ConversationPageSize+"&search="+Uri.EscapeDataString(query),NexusJson.Default.ConversationPage);if(query!=search)return;conversations=page.Items.ToList();conversationCursor=page.NextCursor;}
     private async Task LoadMoreConversations()=>await Guard(async()=>{if(loadingConversations||conversationCursor is null)return;loadingConversations=true;try{var page=await Api.Get("conversations?take="+settings.ConversationPageSize+"&cursor="+Uri.EscapeDataString(conversationCursor)+"&search="+Uri.EscapeDataString(search),NexusJson.Default.ConversationPage);conversations.AddRange(page.Items.Where(c=>!conversations.Any(x=>x.Id==c.Id)));conversationCursor=page.NextCursor;if(conversations.Count>500)conversations.RemoveRange(0,conversations.Count-500);}finally{loadingConversations=false;}});
@@ -188,9 +189,11 @@ else
         try
         {
             var input=prompt;var files=attachments.ToArray();var target=active;var selectedBefore=active?.Id;
-            if(target is null)target=await Api.Send(HttpMethod.Post,"conversations",new CreateConversation("שיחה חדשה",model),NexusJson.Default.CreateConversation,NexusJson.Default.Conversation);
+            if(target is null){target=await Api.Send(HttpMethod.Post,"conversations",new CreateConversation("שיחה חדשה",model),NexusJson.Default.CreateConversation,NexusJson.Default.Conversation);if(active?.Id==selectedBefore){active=target;selectedBefore=target.Id;}}
             var changed=PluginEngine.Apply(input,systemInstruction,plugins.Items,"local");var generation=Generation() with{SystemInstruction=changed.System};
-            var run=await Api.Send(HttpMethod.Post,"runs",new SubmitRun(target.Id,changed.Prompt,model,Guid.NewGuid().ToString("N"),generation,files),NexusJson.Default.SubmitRun,NexusJson.Default.Run);
+            if(pendingRequest is null||pendingRequest.ConversationId!=target.Id||pendingRequest.Prompt!=changed.Prompt||pendingRequest.Model!=model||pendingRequest.Settings!=generation||!(pendingRequest.Attachments??[]).SequenceEqual(files))
+                pendingRequest=new SubmitRun(target.Id,changed.Prompt,model,Guid.NewGuid().ToString("N"),generation,files);
+            var run=await Api.Send(HttpMethod.Post,"runs",pendingRequest,NexusJson.Default.SubmitRun,NexusJson.Default.Run);pendingRequest=null;
             if(active?.Id==selectedBefore)
             {
                 if(prompt==input)prompt="";attachments.Clear();await SelectChat(target);
@@ -229,6 +232,7 @@ else
                     if(!IsActive(run)){await StreamClosed(runId,ct);return;}
                 }
                 catch(HttpRequestException ex)when(ex.StatusCode is not (System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden or System.Net.HttpStatusCode.NotFound)){}
+                catch(IOException){}
                 await Task.Delay(1000,ct);
             }
         }

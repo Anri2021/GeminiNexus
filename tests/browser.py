@@ -1,5 +1,5 @@
 """Published WASM browser acceptance tests, with a real API and synthetic provider.
-Install: python -m pip install playwright==1.62.1
+Install: python -m pip install -r tests/requirements.txt
          python -m playwright install --with-deps chromium
 """
 import functools, http.client, http.server, pathlib, threading

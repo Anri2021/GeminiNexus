@@ -1,23 +1,22 @@
-﻿namespace GeminiNexus.Client.Maui;
+using GeminiNexus.UI.Pages;
+using Microsoft.AspNetCore.Components.WebView.Maui;
+
+namespace GeminiNexus.Client.Maui;
 
 public partial class MainPage : ContentPage
 {
-	int count = 0;
-
-	public MainPage()
-	{
-		InitializeComponent();
-	}
-
-	private void OnCounterClicked(object? sender, EventArgs e)
-	{
-		count++;
-
-		if (count == 1)
-			CounterBtn.Text = $"Clicked {count} time";
-		else
-			CounterBtn.Text = $"Clicked {count} times";
-
-		SemanticScreenReader.Announce(CounterBtn.Text);
-	}
+    public MainPage()
+    {
+        InitializeComponent();
+        ServerAddress.Text=Preferences.Default.Get("NexusServerUrl","");
+    }
+    private void Connect(object? sender,EventArgs e)
+    {
+        if(!Uri.TryCreate(ServerAddress.Text?.Trim(),UriKind.Absolute,out var uri)||uri.Scheme!="https"||!string.IsNullOrEmpty(uri.UserInfo)||!string.IsNullOrEmpty(uri.Query)||!string.IsNullOrEmpty(uri.Fragment)||uri.AbsolutePath!="/")
+        { ValidationError.Text="יש להזין כתובת HTTPS של השרת, ללא נתיב, פרטי התחברות או פרמטרים.";return; }
+        Preferences.Default.Set("NexusServerUrl",uri.AbsoluteUri);
+        var view=new BlazorWebView { HostPage="wwwroot/index.html" };
+        view.RootComponents.Add(new RootComponent { Selector="#app",ComponentType=typeof(Workspace) });
+        Content=view;
+    }
 }

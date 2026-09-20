@@ -61,7 +61,6 @@ public sealed record RunCompletion(string Status, string? Error);
 public sealed record UploadLimit(int MaxAttachmentBytes, int MaxPromptChars);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
-    DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
     RespectNullableAnnotations = true, RespectRequiredConstructorParameters = true)]
 [JsonSerializable(typeof(UserInfo))]
 [JsonSerializable(typeof(UserAccount[]))]

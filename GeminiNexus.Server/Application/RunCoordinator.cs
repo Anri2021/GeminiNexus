@@ -8,7 +8,7 @@ using GeminiNexus.Shared;
 
 namespace GeminiNexus.Server.Application;
 
-public sealed partial class RunCoordinator(WorkspaceStore store,IChatProvider provider,ServerOptions options,ILogger<RunCoordinator> logger) : BackgroundService
+public sealed partial class RunCoordinator(WorkspaceStore store,IChatProvider provider,ToolExecutor tools,ServerOptions options,ILogger<RunCoordinator> logger) : BackgroundService
 {
     private readonly Channel<bool> wake=Channel.CreateBounded<bool>(new BoundedChannelOptions(64){FullMode=BoundedChannelFullMode.DropWrite});
     public void Signal()=>wake.Writer.TryWrite(true);
@@ -49,24 +49,32 @@ public sealed partial class RunCoordinator(WorkspaceStore store,IChatProvider pr
             if(run.CancelRequested)cancel.Cancel();cancel.Token.ThrowIfCancellationRequested();
             var payload=await provider.Prepare(request,cancel.Token);
             await store.Append(run.Id,worker,"request",TraceRedactor.Redact(payload,options.ApiKey),cancel.Token);
-            await foreach(var chunk in provider.Stream(run.Model,payload,cancel.Token))
+            for(var toolRound=0;toolRound<8;toolRound++)
             {
-                using(var metadata=JsonDocument.Parse(chunk.RawJson))
+                finished=false;finishReason=null;var roundParts=new JsonArray();
+                await foreach(var chunk in provider.Stream(run.Model,payload,cancel.Token))
                 {
-                    if(metadata.RootElement.TryGetProperty("usageMetadata",out var report))foreach(var field in report.EnumerateObject())usage[field.Name]=JsonNode.Parse(field.Value.GetRawText());
-                    if(metadata.RootElement.TryGetProperty("modelVersion",out var version))modelVersion=version.GetString();
+                    using(var metadata=JsonDocument.Parse(chunk.RawJson))
+                    {
+                        if(metadata.RootElement.TryGetProperty("usageMetadata",out var report))foreach(var field in report.EnumerateObject())usage[field.Name]=JsonNode.Parse(field.Value.GetRawText());
+                        if(metadata.RootElement.TryGetProperty("modelVersion",out var version))modelVersion=version.GetString();
+                    }
+                    if(chunk.Text.Length>0)firstTokenMs??=started.ElapsedMilliseconds;
+                    finishReason=chunk.FinishReason??finishReason;
+                    traceBytes+=Encoding.UTF8.GetByteCount(chunk.RawJson);
+                    if(traceBytes>options.MaxTraceBytes||text.Length+chunk.Text.Length>options.MaxResponseChars)throw new InvalidOperationException("הפלט הגיע למגבלת הזיכרון או הדיבאג שהוגדרה בשרת");
+                    await store.Append(run.Id,worker,"provider",TraceRedactor.Redact(chunk.RawJson,options.ApiKey),cancel.Token);
+                    if(chunk.Text.Length>0){text.Append(chunk.Text);await store.Append(run.Id,worker,"delta",JsonSerializer.Serialize(new TextDelta(chunk.Text),NexusJson.Default.TextDelta),cancel.Token);}
+                    foreach(var part in JsonNode.Parse(chunk.PartsJson)!.AsArray()){var copy=part?.DeepClone();parts.Add(copy);roundParts.Add(part?.DeepClone());}
+                    if(chunk.FinishReason is not null){finished=true;if(chunk.FinishReason!="STOP"){status=chunk.FinishReason=="MAX_TOKENS"?"truncated":"blocked";error=chunk.FinishReason;}}
                 }
-                if(chunk.Text.Length>0)firstTokenMs??=started.ElapsedMilliseconds;
-                finishReason=chunk.FinishReason??finishReason;
-                traceBytes+=Encoding.UTF8.GetByteCount(chunk.RawJson);
-                if(traceBytes>options.MaxTraceBytes||text.Length+chunk.Text.Length>options.MaxResponseChars)throw new InvalidOperationException("הפלט הגיע למגבלת הזיכרון או הדיבאג שהוגדרה בשרת");
-                await store.Append(run.Id,worker,"provider",TraceRedactor.Redact(chunk.RawJson,options.ApiKey),cancel.Token);
-                if(chunk.Text.Length>0){text.Append(chunk.Text);await store.Append(run.Id,worker,"delta",JsonSerializer.Serialize(new TextDelta(chunk.Text),NexusJson.Default.TextDelta),cancel.Token);}
-                foreach(var part in JsonNode.Parse(chunk.PartsJson)!.AsArray())parts.Add(part?.DeepClone());
-                if(chunk.FinishReason is not null){finished=true;if(chunk.FinishReason!="STOP"){status=chunk.FinishReason=="MAX_TOKENS"?"truncated":"blocked";error=chunk.FinishReason;}}
+                if(!finished){status="interrupted";error="הספק סגר את הזרם ללא סיבת סיום";break;}
+                if(!roundParts.Any(p=>p is JsonObject o&&o.ContainsKey("functionCall")))break;
+                var responses=await tools.Execute(run.Id,roundParts,cancel.Token);
+                await store.Append(run.Id,worker,"tool",responses.ToJsonString(),cancel.Token);
+                payload=GeminiProvider.ContinueWithTools(payload,roundParts,responses);
+                if(toolRound==7){status="failed";error="המודל חרג ממספר סבבי הכלים המותר";}
             }
-            if(!finished){status="interrupted";error="הספק סגר את הזרם ללא סיבת סיום";}
-            if(parts.Any(p=>p is JsonObject o&&o.ContainsKey("functionCall"))){status="requires_action";error="המודל ביקש הפעלת כלי; תוצאת הכלי טרם סופקה";}
         }
         catch(OperationCanceledException){status=stop.IsCancellationRequested?"interrupted":"cancelled";error=stop.IsCancellationRequested?"השרת נסגר":"הריצה בוטלה או הגיעה לזמן הקצוב";}
         catch(Exception ex){status="failed";error=ex is Domain.WorkspaceException?ex.Message:"העיבוד נכשל; בדוק את לוג השרת";WorkerError(logger,ex);}

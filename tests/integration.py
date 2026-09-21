@@ -2,9 +2,9 @@
 Run: python3 tests/integration.py --dotnet /path/to/dotnet
 No real provider keys or paid API calls are used.
 """
-import argparse, sqlite3, base64, http.cookiejar, http.server, json, os, pathlib, socket, subprocess, tempfile, threading, time, unittest, urllib.request, urllib.error, uuid
+import argparse, sqlite3, base64, http.cookiejar, http.server, json, os, pathlib, socket, subprocess, tempfile, threading, time, unittest, urllib.request, urllib.error, urllib.parse, uuid
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser();parser.add_argument('--dotnet',default='dotnet');parser.add_argument('--server-dll',default=str(ROOT/'GeminiNexus.Server/bin/Release/net11.0/GeminiNexus.Server.dll'));args,_=parser.parse_known_args()
+parser=argparse.ArgumentParser();parser.add_argument('--dotnet',default='dotnet');parser.add_argument('--server-dll',default=str(ROOT/'GeminiNexus.Server/bin/Release/net11.0/GeminiNexus.Server.dll'));parser.add_argument('--server-exe');args,_=parser.parse_known_args()
 def port():
     with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
 class Gemini(http.server.BaseHTTPRequestHandler):
@@ -16,10 +16,17 @@ class Gemini(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         data=json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))));Gemini.requests.append(data)
         if ':countTokens' in self.path:self.response({'totalTokens':len(json.dumps(data))//4});return
-        prompt=data['contents'][-1]['parts'][0]['text']
+        if self.path.endswith('/interactions'):
+            self.response({'name':'interactions/fixture','status':'completed'});return
+        last=data['contents'][-1]['parts'][0]
+        prompt='TOOL_RESULT' if 'functionResponse' in last else last['text']
         if 'FAIL' in prompt:self.response({'error':{'code':429,'message':'quota'}},429);return
         self.send_response(200);self.send_header('Content-Type','text/event-stream');self.send_header('Connection','close');self.end_headers()
         try:
+            if prompt=='TOOL':
+                event={'candidates':[{'index':0,'content':{'role':'model','parts':[{'functionCall':{'id':'fixture-call','name':'nexus_calculate','args':{'expression':'(2+3)*4'}}}]}}]}
+                self.wfile.write(('data: '+json.dumps(event)+'\n\n').encode())
+                event={'candidates':[{'index':0,'finishReason':'STOP'}]};self.wfile.write(('data: '+json.dumps(event)+'\n\n').encode());self.wfile.flush();return
             for text in ['שלום ', 'מהמודל ', 'המקבילי']:
                 event={'candidates':[{'index':0,'content':{'role':'model','parts':[{'text':text}]}}]}
                 self.wfile.write(('data: '+json.dumps(event)+'\n\n').encode());self.wfile.flush();time.sleep(1 if 'SLOW' in prompt else .03)
@@ -46,14 +53,14 @@ class Contracts(unittest.TestCase):
     def setUpClass(cls):
         cls.temp=tempfile.TemporaryDirectory();cls.api_port=port();cls.mock=http.server.ThreadingHTTPServer(('127.0.0.1',port()),Gemini);threading.Thread(target=cls.mock.serve_forever,daemon=True).start()
         cls.url=f'http://127.0.0.1:{cls.api_port}';cls.password=uuid.uuid4().hex
-        cls.env={k:v for k,v in os.environ.items() if not k.startswith(('OTEL_', 'APPLICATIONINSIGHTS_', 'APPINSIGHTS_', 'CORECLR_', 'COR_', 'DOTNET_STARTUP_HOOKS'))}|{'DOTNET_CLI_TELEMETRY_OPTOUT':'1','OTEL_SDK_DISABLED':'true','DOTNET_EnableDiagnostics':'0','ASPNETCORE_ENVIRONMENT':'Testing','Urls':cls.url,'Auth__AdminPassword':cls.password,'Auth__AllowInsecureLocal':'true','Auth__KeyPath':cls.temp.name+'/keys','Database__ConnectionString':'Data Source='+cls.temp.name+'/nexus.db;Default Timeout=15','Gemini__ApiKey':'fixture-key','Gemini__BaseUrl':f'http://127.0.0.1:{cls.mock.server_port}/v1beta/','RateLimits__ApiRequestsPerMinute':'10000','Processing__Workers':'4','Processing__PerUserConcurrency':'2'}
+        cls.env={k:v for k,v in os.environ.items() if not k.startswith(('OTEL_', 'APPLICATIONINSIGHTS_', 'APPINSIGHTS_', 'CORECLR_', 'COR_', 'DOTNET_STARTUP_HOOKS'))}|{'DOTNET_CLI_TELEMETRY_OPTOUT':'1','OTEL_SDK_DISABLED':'true','DOTNET_EnableDiagnostics':'0','ASPNETCORE_ENVIRONMENT':'Testing','Urls':cls.url,'Auth__AdminPassword':cls.password,'Auth__AllowInsecureLocal':'true','Auth__KeyPath':cls.temp.name+'/keys','Database__ConnectionString':'Data Source='+cls.temp.name+'/nexus.db;Default Timeout=15','Gemini__ApiKey':'fixture-key','Gemini__BaseUrl':f'http://127.0.0.1:{cls.mock.server_port}/v1beta/','RateLimits__ApiRequestsPerMinute':'10000','Processing__Workers':'4','Processing__PerUserConcurrency':'2','Plugins__Directory':cls.temp.name+'/plugins','PasswordReset__PickupDirectory':cls.temp.name+'/mail','PasswordReset__PublicBaseUrl':cls.url+'/','LD_LIBRARY_PATH':str(ROOT/'native')+os.pathsep+os.environ.get('LD_LIBRARY_PATH','')}
         cls.start();cls.admin=Client(cls.url);assert cls.admin.call('/api/auth/login','POST',{'name':'admin','password':cls.password})[0]==200
         cls.other=Client(cls.url);assert cls.admin.call('/api/admin/users','POST',{'name':'second','password':cls.password})[0]==200
         assert cls.other.call('/api/auth/login','POST',{'name':'second','password':cls.password})[0]==200
     @classmethod
     def start(cls):
         if hasattr(cls,'log'):cls.log.close()
-        cls.log=open(cls.temp.name+'/server.log','a');cls.process=subprocess.Popen([args.dotnet,args.server_dll],cwd=ROOT/'GeminiNexus.Server',env=cls.env,stdout=cls.log,stderr=subprocess.STDOUT)
+        cls.log=open(cls.temp.name+'/server.log','a');command=[args.server_exe] if args.server_exe else [args.dotnet,args.server_dll];cls.process=subprocess.Popen(command,cwd=ROOT/'GeminiNexus.Server',env=cls.env,stdout=cls.log,stderr=subprocess.STDOUT)
         for _ in range(150):
             if cls.process.poll() is not None:raise RuntimeError(pathlib.Path(cls.temp.name+'/server.log').read_text())
             try:
@@ -152,6 +159,35 @@ class Contracts(unittest.TestCase):
         self.assertEqual(client.call('/api/auth/login','POST',{'name':'rotation-user','password':new})[0],200)
         self.assertEqual(client.call('/api/auth/logout','POST')[0],204)
         self.assertEqual(client.call('/api/auth/me')[0],401)
+        recovery_email='recovery@example.test';status,recovery=self.admin.call('/api/admin/users','POST',{'name':'recovery','password':self.password,'email':recovery_email});self.assertEqual(status,200,recovery)
+        anonymous=Client(self.url);mail_directory=pathlib.Path(self.temp.name)/'mail';before=len(list(mail_directory.glob('*.txt'))) if mail_directory.exists() else 0
+        status,accepted=anonymous.call('/api/auth/password-reset','POST',{'email':recovery_email});self.assertEqual(status,200,accepted);self.assertEqual(accepted['status'],'accepted')
+        mail=list(mail_directory.glob('*.txt'));self.assertEqual(len(mail),before+1);link=mail[-1].read_text().strip().splitlines()[-1];token=urllib.parse.parse_qs(urllib.parse.urlparse(link).query)['resetToken'][0]
+        reset_password=uuid.uuid4().hex;self.assertEqual(anonymous.call('/api/auth/password-reset/confirm','POST',{'token':token,'newPassword':reset_password})[0],204)
+        self.assertEqual(anonymous.call('/api/auth/password-reset/confirm','POST',{'token':token,'newPassword':uuid.uuid4().hex})[0],400)
+        self.assertEqual(Client(self.url).call('/api/auth/login','POST',{'name':'recovery','password':reset_password})[0],200)
+        self.assertEqual(anonymous.call('/api/auth/password-reset','POST',{'email':'missing@example.test'})[0],200);self.assertEqual(len(list(mail_directory.glob('*.txt'))),before+1)
+    def test_11_migrations_provider_operations_and_tools(self):
+        with sqlite3.connect(self.temp.name+'/nexus.db') as db:
+            versions=[row[0] for row in db.execute('SELECT Version FROM SchemaMigrations ORDER BY Version')]
+        self.assertEqual(versions,[1,2,3,4])
+        status,catalog=self.admin.call('/api/provider/capabilities');self.assertEqual(status,200);self.assertTrue(any(x['id']=='live' and x['realtime'] for x in catalog['items']))
+        status,operation=self.admin.call('/api/provider/operations','POST',{'capability':'interactions','method':'POST','resource':'interactions','body':'{"input":"hello"}'})
+        self.assertEqual(status,201,operation);self.assertEqual(operation['status'],'completed')
+        self.assertEqual(self.other.call('/api/auth/login','POST',{'name':'second','password':self.password})[0],200)
+        self.assertEqual(self.other.call('/api/provider/operations')[1]['items'],[])
+        c=self.conversation();_,r=self.submit(c,'TOOL');done=self.wait(r);self.assertEqual(done['status'],'completed',done)
+        _,events=self.admin.call(f"/api/runs/{r['id']}/events?format=json");self.assertTrue(any(e['kind']=='tool' for e in events['items']))
+        with sqlite3.connect(self.temp.name+'/nexus.db') as db:
+            execution=db.execute('SELECT ToolName,ResultJson,Status FROM ToolExecutions WHERE RunId=?',(r['id'],)).fetchone()
+        self.assertEqual(execution[0],'nexus_calculate');self.assertEqual(json.loads(execution[1])['value'],20);self.assertEqual(execution[2],'completed')
+        package={'manifest':{'id':'fixture-wasi','version':'1.0.0','name':'WASI fixture','runtime':'wasi','entryPoint':'module.wasm','permissions':[],'environments':['server'],'tools':[{'name':'fixture_tool','description':'fixture','inputSchemaJson':'{"type":"OBJECT"}'}]},'wasmBase64':base64.b64encode(b'\0asm\x01\0\0\0').decode(),'enabled':True,'execution':'server'}
+        status,installed=self.admin.call('/api/plugins/packages','POST',package);self.assertEqual(status,201,installed);self.assertEqual(installed['packageHash'],__import__('hashlib').sha256(b'\0asm\x01\0\0\0').hexdigest().upper())
+        with sqlite3.connect(self.temp.name+'/nexus.db') as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM PluginPackages WHERE Id=?',('fixture-wasi',)).fetchone()[0],1)
+        self.assertEqual(self.admin.call('/api/plugins/fixture-wasi','DELETE')[0],204)
+        status,ready=Client(self.url).call('/health/ready');self.assertEqual(status,200);self.assertEqual(ready['schemaVersion'],4)
+        self.assertEqual(self.admin.call('/api/retention','PUT',{'conversationDays':30,'fileDays':7,'deleteArchived':True})[0],204);self.assertEqual(self.admin.call('/api/retention')[1]['conversationDays'],30)
+        status,similarity=self.admin.call('/api/local/similarity','POST',{'left':[1,2,3,4],'right':[2,3,4,5],'backend':'native'});self.assertEqual(status,200,similarity);self.assertAlmostEqual(similarity['value'],40)
     def test_99_login_rate_limit_is_independent(self):
         anonymous=Client(self.url);anonymous.call('/health/live')
         codes=[anonymous.call('/api/auth/login','POST',{'name':'unknown','password':'wrong'})[0] for _ in range(7)]

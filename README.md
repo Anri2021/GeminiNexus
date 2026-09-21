@@ -13,6 +13,11 @@
 - קבצים בקלט כחלקי inlineData, הצגת תמונות ואודיו נתמכים, Markdown בסיסי מקודד נגד HTML זדוני והעתקת קוד.
 - תוספי פרומפט דטרמיניסטיים: prefix, suffix, system, replace. הגדרות מסונכרנות, וביצוע בשרת או בלקוח.
 - מתאם generateContent, קטלוג מודלים וספירת טוקנים רשמית הכוללת הוראות מערכת וכלים. מעבדת API למנהל עבור בקשות JSON חד־פעמיות.
+- מסך יכולות ופעולות שמורות עבור Interactions,‏ Embeddings,‏ Batch,‏ Files,‏ Cache,‏ Media ו־Operations, וכן שער WebSocket מאומת ומוגבל ל־Live API. העלאת קובץ מרוחק משתמשת בפרוטוקול resumable בלי לחשוף את מפתח הספק ללקוח.
+- קריאות כלים רב־סבביות עם כלים מובנים וחבילות WASI מבודדות בתהליך `wasmtime`. ה־manifest, ההרשאות, הגרסה, hash החבילה ותוצאות ההפעלה נשמרים במסד הנתונים.
+- הגירות סכימה ממוספרות, נעילת הגירה ב־PostgreSQL, תביעת עבודות עם `SKIP LOCKED` ונעילות advisory לריבוי מופעים. קיימת בדיקת קבלה ייעודית לשני שרתים מול PostgreSQL.
+- איפוס סיסמה חד־פעמי בדוא״ל, מדיניות שימור, גיבוי ושחזור ל־SQLite/PostgreSQL, ו־health readiness הכולל גרסת סכימה ועומק תור.
+- יעד פרסום NativeAOT ל־Linux ורכיב C++ דרך `LibraryImport`, מסלול SIMD ללא הקצאות שנמדד בבדיקה, זיכרון Native מיושר ומסלול OpenCL מפורש עם דיווח כאשר GPU אינו זמין.
 
 ## 2. בנייה ובדיקות
 
@@ -24,6 +29,7 @@ PowerShell:
 ./scripts/Publish.ps1
 python ./tests/integration.py
 python ./tests/source_checks.py
+python ./tests/load.py
 ```
 
 Bash:
@@ -32,17 +38,18 @@ Bash:
 bash scripts/publish.sh
 python3 tests/integration.py
 python3 tests/source_checks.py
+python3 tests/load.py
 ```
 
 הסקריפטים מפרסמים בנפרד את השרת ואת Client.Wasm. בדיקות האינטגרציה מפעילות שרת אמיתי מול ספק בדיקה מקומי, עם נתונים וסודות זמניים, ללא קריאות Google בתשלום. בדיקות המקור מקמפלות את החוזים, רכיבי Razor ומתאם הספק ומריצות בדיקות SSE, סריאליזציה, השחרה ו־Markdown; הן אינן תחליף לבדיקות מסד הנתונים או לבניית WASM/MAUI.
 
-תהליך GitHub Actions בקובץ `.github/workflows/verify.yml` כולל פרסום השרת והממשק, בדיקות אינטגרציה, בדיקות מקור, בדיקת קבלה בדפדפן ובניית MAUI ל־Windows. הריצה המתועדת בסעיף 5 עברה בפועל בשני ניסיונות רצופים.
+תהליך GitHub Actions בקובץ `.github/workflows/verify.yml` כולל פרסום NativeAOT, בדיקות אינטגרציה מול הקובץ הטבעי, PostgreSQL בשני מופעי שרת, פרסום הממשק, בדיקות עומס ומקור, בדיקת קבלה בדפדפן ובניית MAUI ל־Windows.
 
 ## 3. פריסה דרך Caddy
 
 1. לבטל את מפתחות Gemini שהיו בגרסאות הישנות וליצור מפתחות חדשים. הסרתם מקובצי המקור אינה מבטלת את המפתחות או מוחקת היסטוריית Git.
 2. להגדיר `Auth__AdminPasswordFile` ו־`Gemini__ApiKeyFile` לקבצים חיצוניים, או את `Auth__AdminPassword` ו־`Gemini__ApiKey` בסביבת התהליך. סיסמת המנהל חייבת להכיל לפחות 16 תווים. אין לשמור ערכים אלה במאגר. אין לשתף אותם בצ׳אט.
-3. להעתיק את `artifacts/publish/server` אל `/srv/gemininexus/server`, ואת `artifacts/publish/client` אל `/srv/gemininexus/client`.
+3. להריץ את `scripts/Publish.ps1` או `scripts/publish.sh`. הסקריפטים בונים את שרת Linux כ־NativeAOT ואת ספריית C++ ומפרסמים את WASM. להעתיק את `artifacts/publish/server` אל `/srv/gemininexus/server`, ואת `artifacts/publish/client` אל `/srv/gemininexus/client`.
 4. להתאים ב־`deploy/server.env.example` את `AllowedHosts` ואת נתיבי הסודות, וליצור קובץ `/etc/gemininexus/server.env` עם הרשאות שירות בלבד. ב־`deploy/gemininexus.service` להתאים את הנתיב ל־dotnet ואת משתמש השירות. ליצור משתמש שירות ייעודי לפני התקנה.
 5. ב־`deploy/Caddyfile` להגדיר את `NEXUS_DOMAIN` בסביבת Caddy לדומיין האמיתי. התצורה מניחה ש־Caddy והשרת על אותו מארח: API בפורט פנימי 5000 וקובצי WASM מוגשים מהדיסק. יש להתאים כתובת upstream ורשימת `Proxy__KnownProxies__0` אם Caddy נמצא במארח אחר; אין לסמוך על כל Proxy.
 6. לבדוק תצורת Caddy באמצעות `caddy validate --config /path/to/Caddyfile`, להפעיל את השירותים, ואז לבדוק `/health/ready`, התחברות, שיחה ורענון דפדפן דרך הדומיין וה־HTTPS האמיתיים.
@@ -60,12 +67,12 @@ python3 tests/source_checks.py
 |---|---|
 | אימות סביבת היעד | בנייה מלאה עם חבילות משוחזרות, בדיקות בדפדפן על WASM אמיתי, MAUI במכשירי היעד, בדיקת Gemini אמיתי, דומיין ו־TLS, גיבוי ושחזור |
 | גלילה וזיכרון | בדיקת עומס עם מדיה והודעות בגבהים משתנים; הודעה בודדת ומדיה עשויות לחרוג מבאפר התצוגה |
-| PostgreSQL וריבוי שרתים | המתאם קיים אך דורש בדיקות מסד נפרדות, הגירות סכימה עם גרסאות ובדיקות תחרות בין תהליכים. SQLite מיועד למופע שרת יחיד עם קובץ מקומי |
-| API מתקדם | ממשקי מוצר מלאים ל־Interactions, Live, Batch, Embeddings, קבצים מרוחקים, cache, וידאו ומדיה; מעבדת JSON אינה מממשת מסכים אלה |
-| כלים ותוספים | מנוע חבילות מבודד עם Manifest והרשאות, התקנה וגרסאות, תוצאות functionCall, וסביבות WASM/Native. כרגע תוספי פרומפט בלבד; functionCall מסתיים ב־requires_action |
-| AOT וביצועים | פרסום NativeAOT בפועל ובדיקת trim של כל חבילה; מדדי הקצאות, עומס וזמן תגובה. חוזי היישום משתמשים ב־Source Generators, אך `Client.Wasm` ו־`Client.Maui` מפעילים כעת fallback של Reflection לצורכי JS interop פנימי של Blazor 11. לכן יעד ללא Reflection מלא ויעד אפס הקצאות עדיין לא הושגו |
-| ספריות וחישוב מקומי | שילוב תפעולי של Refit, Polly, Mapperly, gRPC, Dapper.AOT/EF compiled queries לפי תפקיד, ויחידות Native/GPU/Rust/C++/bflat/NoGC. אין להציג חבילת NuGet שאינה בשימוש כמימוש של דרישה |
-| תפעול משתמשים | איפוס סיסמה בדוא״ל; כללי שימור שיחות וקבצים, ניטור תפעולי ומבחני התאוששות ועומס |
+| PostgreSQL וריבוי שרתים | הקוד וה־CI כוללים הגירות ממוספרות ובדיקת תחרות בשני תהליכים; עדיין נדרשת הרצה מוצלחת של ה־CI החדש ובדיקת גיבוי/שחזור מול מסד היעד |
+| API מתקדם | קיים מסך פעולות מאוחד ושער Live; לכל יכולת נשמרים הבקשה, התגובה והסטטוס. עדיין נדרש אימות מול חשבון Gemini חי מפני שהבדיקות המקומיות משתמשות בספק מדומה |
+| כלים ותוספים | קיימים function calling רב־סבבי וחבילות WASI מבודדות. יש לאמת `wasmtime` וחבילה אמיתית במערכת היעד; הרשאות רשת וקבצים אינן ניתנות כברירת מחדל |
+| AOT וביצועים | שרת NativeAOT, בדיקות אינטגרציה טבעיות, בדיקת עומס ומסלול SIMD ללא הקצאות קיימים. `Client.Wasm` ו־`Client.Maui` עדיין מפעילים fallback של Reflection לצורכי JS interop פנימי של Blazor 11; לכן איסור Reflection מוחלט בכל חמשת הפרויקטים אינו תואם כרגע ל־Blazor שנבחר |
+| ספריות וחישוב מקומי | MemoryPack,‏ FastEndpoints,‏ Polly,‏ Dapper.AOT,‏ `System.Text.Json` source generation,‏ C++/NativeMemory/SIMD/OpenCL משולבים. Refit,‏ Mapperly,‏ gRPC,‏ EF compiled queries,‏ Rust,‏ ILGPU/CUDA ו־bflat אינם משולבים מפני שאין להם כרגע תפקיד תפעולי שאינו משכפל את מתאמי HTTP/ADO/OpenCL הקיימים |
+| תפעול משתמשים | איפוס סיסמה, שימור, גיבוי/שחזור ומבחן עומס קיימים; ניטור חיצוני, תרגיל שחזור תקופתי וספק SMTP אמיתי תלויים בסביבת הפריסה |
 
 היסטוריית הודעות אינה נמחקת כשמפנים את באפר הלקוח. אירועי הדיבאג כפופים ל־`Limits:TraceRetentionDays`; זרם אירועים שכבר נמחק נסגר באופן תקין. השדות הגולמיים משמרים מידע שהספק מחזיר, לאחר השחרת שדות סוד מוכרים; אין גישה למידע שהספק לא חשף.
 
@@ -78,4 +85,4 @@ python3 tests/source_checks.py
 - בדיקת הדפדפן אימתה טעינת WASM, היסטוריה שנשמרת, הסתעפות, שיחות מקבילות, תצוגת מובייל והיעדר חריגות דפדפן.
 - במסגרת התיקון נוספו תמיכת fingerprint ו־import map של .NET 11, מעבר מ־DevServer המיושן ל־Gateway, חוזי JSON עקביים לשדות nullable ואבחון מפורט לכשלי קבלה.
 - לא בוצעו פריסה לשרת היעד, שינוי DNS, החלפת מפתחות אצל Google או בדיקה עם Gemini חי. מפתחות שנחשפו בעבר עדיין דורשים ביטול אצל הספק.
-- היעדים הפתוחים בסעיף 4 — ובפרט PostgreSQL רב־שרתים, NativeAOT, מבחני עומס, ממשקי Gemini המתקדמים, מנוע תוספים מבודד וחישוב Native/GPU — לא נכללו באימות זה.
+- לאחר הריצה המתועדת לעיל נוספה חבילת ההשלמות הרחבה. היא חייבת לעבור את ריצת GitHub Actions החדשה לפני מיזוג; אין להסתמך על מזהה הריצה הישן לאימות הקוד החדש.

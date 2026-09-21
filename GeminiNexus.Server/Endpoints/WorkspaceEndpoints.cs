@@ -40,7 +40,17 @@ public sealed class MeEndpoint(ServerOptions options) : NexusEndpoint
 public sealed class UsersEndpoint(WorkspaceStore store,ServerOptions options):NexusEndpoint
 {
     public override void Configure()=>Post("/api/admin/users");
-    public override async Task HandleAsync(CancellationToken ct){if(User.Identity?.Name!=options.AdminName)throw new WorkspaceException(403,"נדרשת הרשאת מנהל");var r=await Body(NexusJson.Default.LoginRequest,ct);await Json(await store.AddUser(r.Name,r.Password,ct),NexusJson.Default.UserInfo,ct);}
+    public override async Task HandleAsync(CancellationToken ct){if(User.Identity?.Name!=options.AdminName)throw new WorkspaceException(403,"נדרשת הרשאת מנהל");var r=await Body(NexusJson.Default.CreateUserRequest,ct);await Json(await store.AddUser(r.Name,r.Password,r.Email,ct),NexusJson.Default.UserInfo,ct);}
+}
+public sealed class RequestPasswordResetEndpoint(PasswordResetService resets):NexusEndpoint
+{
+    public override void Configure(){Post("/api/auth/password-reset");AllowAnonymous();}
+    public override async Task HandleAsync(CancellationToken ct){await resets.Request((await Body(NexusJson.Default.PasswordResetRequest,ct)).Email,ct);await Json(new PasswordResetAccepted(),NexusJson.Default.PasswordResetAccepted,ct);}
+}
+public sealed class ConfirmPasswordResetEndpoint(PasswordResetService resets):NexusEndpoint
+{
+    public override void Configure(){Post("/api/auth/password-reset/confirm");AllowAnonymous();}
+    public override async Task HandleAsync(CancellationToken ct){await resets.Confirm(await Body(NexusJson.Default.PasswordResetConfirm,ct),ct);HttpContext.Response.StatusCode=204;}
 }
 public sealed class ConversationsEndpoint(WorkspaceStore store):NexusEndpoint
 {public override void Configure()=>Get("/api/conversations");public override async Task HandleAsync(CancellationToken ct)=>await Json(await store.Conversations(Owner,QueryText("cursor"),Number("take",30),QueryText("search"),ct),NexusJson.Default.ConversationPage,ct);}
@@ -69,7 +79,7 @@ public sealed class SubmitRunEndpoint(WorkspaceStore store,RunCoordinator coordi
         if(advanced.RootElement.TryGetProperty("contents",out _))throw new WorkspaceException(400,"היסטוריית השיחה נקבעת על ידי השרת");
         long bytes=0;foreach(var attachment in r.Attachments??[]){if(attachment.Name.Length>255||attachment.MimeType.Length>120||attachment.Data.Length>options.MaxAttachmentBytes*2)throw new WorkspaceException(400,"קובץ אינו תקין");try{bytes+=Convert.FromBase64String(attachment.Data).Length;}catch(FormatException){throw new WorkspaceException(400,"קובץ אינו תקין");}}
         if(bytes>options.MaxAttachmentBytes||(r.Attachments?.Length??0)>8)throw new WorkspaceException(413,"הקבצים חורגים מהמגבלה");
-        var plugins=await store.Plugins(Owner,ct);var changed=PluginEngine.Apply(r.Prompt,s.SystemInstruction,plugins.Items,"server");r=r with{Prompt=changed.Prompt,Settings=s with{SystemInstruction=changed.System}};
+        var plugins=await store.Plugins(Owner,ct);var changed=PluginEngine.Apply(r.Prompt,s.SystemInstruction,plugins.Items,"server");r=r with{Prompt=changed.Prompt,Settings=s with{SystemInstruction=changed.System,AdvancedJson=PluginEngine.AddToolDeclarations(s.AdvancedJson,plugins.Items,"server")}};
         if(r.Prompt.Length>options.MaxPromptChars||r.Settings.SystemInstruction.Length>100000)throw new WorkspaceException(400,"פלט התוספים גדול ממגבלת הפרומפט");
         var run=await store.Enqueue(Owner,r,ct);coordinator.Signal();HttpContext.Response.StatusCode=202;await Json(run,NexusJson.Default.Run,ct);
     }
@@ -110,12 +120,18 @@ public sealed class SettingsEndpoint(WorkspaceStore store):NexusEndpoint
 {public override void Configure()=>Get("/api/settings");public override async Task HandleAsync(CancellationToken ct)=>await Json(await store.Settings(Owner,ct),NexusJson.Default.WorkspaceSettings,ct);}
 public sealed class SaveSettingsEndpoint(WorkspaceStore store):NexusEndpoint
 {public override void Configure()=>Put("/api/settings");public override async Task HandleAsync(CancellationToken ct){await store.SaveSettings(Owner,await Body(NexusJson.Default.WorkspaceSettings,ct),ct);HttpContext.Response.StatusCode=204;}}
+public sealed class RetentionEndpoint(WorkspaceStore store):NexusEndpoint
+{public override void Configure()=>Get("/api/retention");public override async Task HandleAsync(CancellationToken ct)=>await Json(await store.Retention(Owner,ct),NexusJson.Default.RetentionPolicy,ct);}
+public sealed class SaveRetentionEndpoint(WorkspaceStore store):NexusEndpoint
+{public override void Configure()=>Put("/api/retention");public override async Task HandleAsync(CancellationToken ct){await store.SaveRetention(Owner,await Body(NexusJson.Default.RetentionPolicy,ct),ct);HttpContext.Response.StatusCode=204;}}
 public sealed class PluginsEndpoint(WorkspaceStore store):NexusEndpoint
 {public override void Configure()=>Get("/api/plugins");public override async Task HandleAsync(CancellationToken ct)=>await Json(await store.Plugins(Owner,ct),NexusJson.Default.PluginList,ct);}
 public sealed class SavePluginEndpoint(WorkspaceStore store):NexusEndpoint
 {public override void Configure()=>Put("/api/plugins");public override async Task HandleAsync(CancellationToken ct){await store.SavePlugin(Owner,await Body(NexusJson.Default.PluginDefinition,ct),ct);HttpContext.Response.StatusCode=204;}}
 public sealed class DeletePluginEndpoint(WorkspaceStore store):NexusEndpoint
 {public override void Configure()=>Delete("/api/plugins/{id}");public override async Task HandleAsync(CancellationToken ct){await store.DeletePlugin(Owner,Id,ct);HttpContext.Response.StatusCode=204;}}
+public sealed class InstallPluginPackageEndpoint(PluginPackageService packages):NexusEndpoint
+{public override void Configure()=>Post("/api/plugins/packages");public override async Task HandleAsync(CancellationToken ct){HttpContext.Response.StatusCode=201;await Json(await packages.Install(Owner,await Body(NexusJson.Default.PluginPackageRequest,ct),ct),NexusJson.Default.PluginDefinition,ct);}}
 public sealed class ExplorerEndpoint(IProviderExplorer provider,ServerOptions options):NexusEndpoint
 {
     public override void Configure()=>Post("/api/explorer");
@@ -125,6 +141,25 @@ public sealed class CountEndpoint(ITokenCounter provider):NexusEndpoint
 {public override void Configure()=>Post("/api/chat/count-tokens");public override async Task HandleAsync(CancellationToken ct){var r=await Body(NexusJson.Default.TokenCountRequest,ct);await Json(new TokenCountResult(await provider.Count(r.Model,r.ContentsJson,ct),false),NexusJson.Default.TokenCountResult,ct);}}
 public sealed class LimitsEndpoint(ServerOptions options):NexusEndpoint
 {public override void Configure()=>Get("/api/limits");public override Task HandleAsync(CancellationToken ct)=>Json(new UploadLimit(options.MaxAttachmentBytes,options.MaxPromptChars),NexusJson.Default.UploadLimit,ct);}
+public sealed class SimilarityEndpoint:NexusEndpoint
+{public override void Configure()=>Post("/api/local/similarity");public override async Task HandleAsync(CancellationToken ct){var request=await Body(NexusJson.Default.SimilarityRequest,ct);if(request.Left.Length>2_000_000||request.Backend is not ("auto" or "simd" or "native" or "gpu"))throw new WorkspaceException(400,"בקשת חישוב אינה תקינה");var value=ComputeKernels.Dot(request.Left,request.Right,request.Backend);await Json(new SimilarityResult(value,request.Backend,ComputeKernels.OpenClAvailable(),ComputeKernels.Invocations),NexusJson.Default.SimilarityResult,ct);}}
+
+public sealed class ProviderCapabilitiesEndpoint(IProviderOperations provider):NexusEndpoint
+{public override void Configure()=>Get("/api/provider/capabilities");public override Task HandleAsync(CancellationToken ct)=>Json(provider.Capabilities,NexusJson.Default.ProviderCapabilityCatalog,ct);}
+
+public sealed class ProviderOperationsEndpoint(GetProviderOperationsHandler handler):NexusEndpoint
+{public override void Configure()=>Get("/api/provider/operations");public override async Task HandleAsync(CancellationToken ct)=>await Json(await handler.Handle(new(Owner),ct),NexusJson.Default.ProviderOperationList,ct);}
+
+public sealed class ExecuteProviderOperationEndpoint(ExecuteProviderOperationHandler handler,ServerOptions options):NexusEndpoint
+{
+    public override void Configure()=>Post("/api/provider/operations");
+    public override async Task HandleAsync(CancellationToken ct)
+    {
+        var request=await Body(NexusJson.Default.ProviderOperationRequest,ct);
+        if(request.Body.Length>options.MaxAttachmentBytes*2)throw new WorkspaceException(413,"גוף הפעולה גדול מהמגבלה");
+        var operation=await handler.Handle(new(Owner,request),ct);HttpContext.Response.StatusCode=operation.Status=="completed"?201:502;await Json(operation,NexusJson.Default.ProviderOperation,ct);
+    }
+}
 
 public sealed class ListUsersEndpoint(WorkspaceStore store,ServerOptions options):NexusEndpoint
 {

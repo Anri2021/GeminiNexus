@@ -1,6 +1,7 @@
 @implements IAsyncDisposable
 @inject WorkspaceClient Api
 @inject IJSRuntime JS
+@inject NavigationManager Navigation
 
 <div class="nexus-app @settings.Theme" dir="rtl">
 @if(loading)
@@ -8,7 +9,10 @@
 else if(user is null)
 {
     <main class="login-screen"><div class="login-card"><span class="nexus-star">✦</span><h1>Gemini Nexus</h1><p>סביבת החשיבה שלך. השיחות, הכלים והשליטה.</p>
-    <form @onsubmit="Login" @onsubmit:preventDefault><label>שם משתמש<input @bind="loginName" autocomplete="username" required /></label><label>סיסמה<input type="password" @bind="password" autocomplete="current-password" required /></label><button class="primary" type="submit" disabled="@busy">כניסה לסביבת העבודה</button></form>
+    @if(!resetMode){<form @onsubmit="Login" @onsubmit:preventDefault><label>שם משתמש<input @bind="loginName" autocomplete="username" required /></label><label>סיסמה<input type="password" @bind="password" autocomplete="current-password" required /></label><button class="primary" type="submit" disabled="@busy">כניסה לסביבת העבודה</button></form><button @onclick="()=>resetMode=true">שכחתי סיסמה</button>}
+    else if(string.IsNullOrEmpty(resetToken)){<form @onsubmit="RequestPasswordReset" @onsubmit:preventDefault><label>כתובת דוא״ל<input type="email" @bind="resetEmail" autocomplete="email" required /></label><button class="primary" type="submit" disabled="@busy">שליחת קישור איפוס</button></form><button @onclick="()=>resetMode=false">חזרה להתחברות</button>}
+    else{<form @onsubmit="ConfirmPasswordReset" @onsubmit:preventDefault><label>סיסמה חדשה — לפחות 16 תווים<input type="password" minlength="16" @bind="resetNewPassword" autocomplete="new-password" required /></label><button class="primary" type="submit" disabled="@busy">עדכון הסיסמה</button></form>}
+    @if(resetNotice is not null){<p class="muted" role="status">@resetNotice</p>}
     @if(error is not null){<p class="error" role="alert">@error</p>}</div></main>
 }
 else
@@ -26,6 +30,7 @@ else
         </nav>
         <div class="sidebar-footer">
             <button class="nav-action" @onclick='()=>panel="plugins"'>⊞ <span>תוספים</span><small>@plugins.Items.Count(p=>p.Enabled) פעילים</small></button>
+            <button class="nav-action" @onclick="OpenProvider">◫ <span>יכולות Gemini</span></button>
             <button class="nav-action" @onclick='()=>panel="settings"'>⚙ <span>העדפות ובאפרינג</span></button>
             @if(user.IsAdmin){<button class="nav-action" @onclick='()=>panel="lab"'>⌘ <span>מעבדת API</span></button>}
             <button class="nav-action" @onclick="OpenAccount">◎ <span>חשבון ואבטחה</span></button>
@@ -116,8 +121,9 @@ else
             {
                 <h3>משתמשים וחיבורים</h3>
                 @foreach(var account in accounts)
-                {<div class="plugin-card"><div><strong>@account.Name</strong><small>@account.Sessions חיבורים פעילים</small></div><button @onclick="()=>RevokeAccount(account)">ניתוק כל המכשירים</button></div>}
+                {<div class="plugin-card"><div><strong>@account.Name</strong><small>@account.Sessions חיבורים פעילים · @(string.IsNullOrEmpty(account.Email)?"ללא דוא״ל":account.Email)</small></div><button @onclick="()=>RevokeAccount(account)">ניתוק כל המכשירים</button></div>}
                 <h3>משתמש חדש</h3><label>שם משתמש<input @bind="accountName" autocomplete="off" /></label>
+                <label>כתובת דוא״ל לאיפוס סיסמה<input type="email" @bind="accountEmail" autocomplete="off" /></label>
                 <label>סיסמה — לפחות 16 תווים<input type="password" @bind="accountPassword" autocomplete="new-password" /></label>
                 <button class="primary" @onclick="CreateAccount">יצירת משתמש</button>
                 <p class="muted">סיסמת המנהל מתעדכנת באמצעות קובץ הסודות של השרת.</p>
@@ -128,6 +134,17 @@ else
                 <label>סיסמה חדשה — לפחות 16 תווים<input type="password" @bind="accountPassword" autocomplete="new-password" /></label>
                 <button class="primary" @onclick="ChangeAccountPassword">עדכון וניתוק כל המכשירים</button>
             }
+        }
+        else if(panel=="provider")
+        {
+            <p class="muted">ממשקי Interactions,‏ Embeddings,‏ Batch,‏ Files,‏ Cache,‏ Media,‏ Operations ו־Live. הפעולות נשמרות בחשבון והתשובה הגולמית נשמרת לאחר השחרת סודות.</p>
+            <div class="capability-grid">@foreach(var capability in providerCapabilities.Items){<button class="plugin-card" @onclick="()=>SelectCapability(capability)"><div><strong>@capability.Name</strong><small>@capability.Id · @string.Join(" / ",capability.Methods)</small></div><span>›</span></button>}</div>
+            <h3>פעולה חדשה</h3>
+            <label>יכולת<select @bind="providerCapability">@foreach(var capability in providerCapabilities.Items.Where(x=>!x.Realtime)){<option value="@capability.Id">@capability.Name</option>}</select></label>
+            <label>פעולה<select @bind="providerMethod"><option>GET</option><option>POST</option><option>PATCH</option><option>DELETE</option></select></label>
+            <label>משאב יחסי<input @bind="providerResource" dir="ltr" /></label><label>גוף JSON<textarea class="json-editor" rows="8" dir="ltr" @bind="providerBody"></textarea></label>
+            <button class="primary" @onclick="ExecuteProvider" disabled="@busy">ביצוע ושמירת התוצאה</button>
+            <h3>פעולות אחרונות</h3>@foreach(var operation in providerOperations.Items){<details class="debug-event"><summary>@operation.Capability · @operation.Status · @operation.UpdatedAt</summary><pre dir="ltr">@Pretty(operation.ResponseJson)</pre></details>}
         }
         else if(panel=="lab")
         {
@@ -160,20 +177,20 @@ else
     private SubmitRun? pendingRequest;
     private UserAccount[] accounts=[];
     private RunMetrics? debugMetrics;
-    private string accountName="",accountPassword="",oldPassword="";
-    private UserInfo? user;private bool loading=true,busy,sidebarOpen,hasMore,hasNewer,loadingHistory,loadingConversations;private string? error,panel,conversationCursor;
+    private string accountName="",accountEmail="",accountPassword="",oldPassword="",resetEmail="",resetToken="",resetNewPassword="";
+    private UserInfo? user;private bool loading=true,busy,sidebarOpen,hasMore,hasNewer,loadingHistory,loadingConversations,resetMode;private string? error,panel,conversationCursor,resetNotice;
     private string loginName="admin",password="",search="",prompt="",model="gemini-3.8-flash",streaming="";
     private List<Conversation> conversations=[];private List<Message> messages=[];private Run[] runs=[];private ModelInfo[] models=[];private Conversation? active;private Run? currentRun;
-    private PluginList plugins=new([]);private List<Attachment> attachments=[];private WorkspaceSettings settings=new();private UploadLimit limits=new(8388608,100000);
+    private PluginList plugins=new([]);private ProviderCapabilityCatalog providerCapabilities=new([]);private ProviderOperationList providerOperations=new([]);private List<Attachment> attachments=[];private WorkspaceSettings settings=new();private UploadLimit limits=new(8388608,100000);
     private int conversationPageSize=30,prefetchPages=1,pageSize=30,bufferTurns=60,bufferMb=4,overscan=4,renderMs=80,contextTurns=20,tokenBudget=24000,outputTokens=8192;private double temperature=1;
-    private string systemInstruction="",advancedJson="{}",pluginName="",pluginKind="prefix",pluginExecution="server",pluginText="",pluginFind="",labMethod="GET",labPath="models",labBody="{}",labResult="";
+    private string systemInstruction="",advancedJson="{}",pluginName="",pluginKind="prefix",pluginExecution="server",pluginText="",pluginFind="",labMethod="GET",labPath="models",labBody="{}",labResult="",providerCapability="interactions",providerMethod="POST",providerResource="interactions",providerBody="{}";
     private string inspectedRun="",debugTab="summary";private List<RunEvent> debugEvents=[];private bool debugMore;
     private Virtualize<Message>? messageVirtualizer;private IJSObjectReference? module;private DotNetObjectReference<Workspace>? reference;private readonly CancellationTokenSource lifetime=new();private CancellationTokenSource? selection,searchCancel;private Task? polling,streamTask;private bool setupNeeded;
-    private string PanelTitle=>panel switch{"settings"=>"העדפות ובאפרינג","plugins"=>"התוספים שלך","lab"=>"מעבדת API","account"=>"חשבון ואבטחה",_=>"בדיקת ריצה"};
+    private string PanelTitle=>panel switch{"settings"=>"העדפות ובאפרינג","plugins"=>"התוספים שלך","provider"=>"יכולות Gemini","lab"=>"מעבדת API","account"=>"חשבון ואבטחה",_=>"בדיקת ריצה"};
     private static bool IsActive(Run r)=>r.Status is "queued" or "running";
     private static string StatusLabel(string s)=>s switch{"queued"=>"בתור","running"=>"מעבד","completed"=>"הושלם","cancelled"=>"בוטל","failed"=>"נכשל","interrupted"=>"נקטע","blocked"=>"נחסם","truncated"=>"מגבלת פלט","requires_action"=>"נדרשת פעולת כלי",_=>s};
     protected override async Task OnInitializedAsync()
-    {try{user=await Api.Get("auth/me",NexusJson.Default.UserInfo,lifetime.Token);await InitializeWorkspace();}catch(HttpRequestException ex)when(ex.StatusCode==System.Net.HttpStatusCode.Unauthorized){}catch(Exception ex){error=ex.Message;}finally{loading=false;}}
+    {var query=Navigation.ToAbsoluteUri(Navigation.Uri).Query.TrimStart('?').Split('&',StringSplitOptions.RemoveEmptyEntries);foreach(var item in query){var pair=item.Split('=',2);if(pair.Length==2&&pair[0]=="resetToken"){resetToken=Uri.UnescapeDataString(pair[1].Replace('+',' '));resetMode=true;break;}}try{user=await Api.Get("auth/me",NexusJson.Default.UserInfo,lifetime.Token);await InitializeWorkspace();}catch(HttpRequestException ex)when(ex.StatusCode==System.Net.HttpStatusCode.Unauthorized){}catch(Exception ex){error=ex.Message;}finally{loading=false;}}
     private async Task InitializeWorkspace()
     {
         settings=await Api.Get("settings",NexusJson.Default.WorkspaceSettings,lifetime.Token);SetFields();plugins=await Api.Get("plugins",NexusJson.Default.PluginList,lifetime.Token);limits=await Api.Get("limits",NexusJson.Default.UploadLimit,lifetime.Token);
@@ -182,39 +199,44 @@ else
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if(module is null){module=await JS.InvokeAsync<IJSObjectReference>("import","./_content/GeminiNexus.UI/workspace.js");reference=DotNetObjectReference.Create(this);}
-        if(setupNeeded&&user is not null){setupNeeded=false;await module.InvokeVoidAsync("setup",reference,settings.PrefetchPages);}
+        if(module is null){module=await InvokeJs<IJSObjectReference>("import","./_content/GeminiNexus.UI/workspace.js");if(module is null)return;reference=DotNetObjectReference.Create(this);}
+        if(setupNeeded&&user is not null){setupNeeded=false;await InvokeModule("setup",reference,settings.PrefetchPages);}
     }
     private async Task Login()=>await Guard(async()=>{busy=true;try{user=await Api.Send(HttpMethod.Post,"auth/login",new LoginRequest(loginName,password),NexusJson.Default.LoginRequest,NexusJson.Default.UserInfo);password="";await InitializeWorkspace();}finally{busy=false;}});
+    private async Task RequestPasswordReset()=>await Guard(async()=>{busy=true;try{await Api.Send(HttpMethod.Post,"auth/password-reset",new PasswordResetRequest(resetEmail),NexusJson.Default.PasswordResetRequest,NexusJson.Default.PasswordResetAccepted);resetNotice="אם הכתובת משויכת לחשבון, קישור איפוס נשלח אליה.";}finally{busy=false;}});
+    private async Task ConfirmPasswordReset()=>await Guard(async()=>{busy=true;try{await Api.Save(HttpMethod.Post,"auth/password-reset/confirm",new PasswordResetConfirm(resetToken,resetNewPassword),NexusJson.Default.PasswordResetConfirm);resetToken=resetNewPassword="";resetMode=false;resetNotice="הסיסמה עודכנה. אפשר להתחבר כעת.";}finally{busy=false;}});
     private async Task OpenAccount()=>await Guard(async()=>{panel="account";accountPassword=oldPassword="";if(user?.IsAdmin==true)accounts=await Api.Get("admin/users",NexusJson.Default.UserAccountArray);});
-    private async Task CreateAccount()=>await Guard(async()=>{await Api.Send(HttpMethod.Post,"admin/users",new LoginRequest(accountName,accountPassword),NexusJson.Default.LoginRequest,NexusJson.Default.UserInfo);accountName=accountPassword="";accounts=await Api.Get("admin/users",NexusJson.Default.UserAccountArray);});
+    private async Task OpenProvider()=>await Guard(async()=>{panel="provider";providerCapabilities=await Api.Get("provider/capabilities",NexusJson.Default.ProviderCapabilityCatalog);providerOperations=await Api.Get("provider/operations",NexusJson.Default.ProviderOperationList);});
+    private void SelectCapability(ProviderCapability capability){providerCapability=capability.Id;providerMethod=capability.Methods.FirstOrDefault(x=>x!="WEBSOCKET")??"GET";providerResource=capability.Id switch{"cache"=>"cachedContents","media"=>"models/gemini-3.8-pro-image:generateContent","operations"=>"operations/","embeddings"=>"models/gemini-embedding-001:embedContent",_=>capability.Id};}
+    private async Task ExecuteProvider()=>await Guard(async()=>{busy=true;try{await Api.Send(HttpMethod.Post,"provider/operations",new ProviderOperationRequest(providerCapability,providerMethod,providerResource,providerBody),NexusJson.Default.ProviderOperationRequest,NexusJson.Default.ProviderOperation);providerOperations=await Api.Get("provider/operations",NexusJson.Default.ProviderOperationList);}finally{busy=false;}});
+    private async Task CreateAccount()=>await Guard(async()=>{await Api.Send(HttpMethod.Post,"admin/users",new CreateUserRequest(accountName,accountPassword,accountEmail),NexusJson.Default.CreateUserRequest,NexusJson.Default.UserInfo);accountName=accountEmail=accountPassword="";accounts=await Api.Get("admin/users",NexusJson.Default.UserAccountArray);});
     private async Task RevokeAccount(UserAccount account)=>await Guard(async()=>{await Api.Action(HttpMethod.Delete,$"admin/users/{account.Id}/sessions");if(account.Id==user?.Id){ClearSession();return;}accounts=await Api.Get("admin/users",NexusJson.Default.UserAccountArray);});
     private async Task ChangeAccountPassword()=>await Guard(async()=>{await Api.Save(HttpMethod.Put,"auth/password",new ChangePassword(oldPassword,accountPassword),NexusJson.Default.ChangePassword);ClearSession();});
     private void ClearSession(){selection?.Cancel();searchCancel?.Cancel();pendingRequest=null;user=null;active=null;currentRun=null;streaming=prompt=password=accountPassword=oldPassword="";attachments.Clear();conversations.Clear();messages.Clear();debugEvents.Clear();runs=[];accounts=[];plugins=new([]);panel=null;}
-    private async Task Logout()=>await Guard(async()=>{await Api.Action(HttpMethod.Post,"auth/logout");selection?.Cancel();searchCancel?.Cancel();pendingRequest=null;user=null;active=null;currentRun=null;streaming="";prompt="";attachments.Clear();conversations.Clear();plugins=new([]);debugEvents.Clear();panel=null;messages.Clear();runs=[];if(module is not null)await module.InvokeVoidAsync("disconnect");});
+    private async Task Logout()=>await Guard(async()=>{await Api.Action(HttpMethod.Post,"auth/logout");selection?.Cancel();searchCancel?.Cancel();pendingRequest=null;user=null;active=null;currentRun=null;streaming="";prompt="";attachments.Clear();conversations.Clear();plugins=new([]);debugEvents.Clear();panel=null;messages.Clear();runs=[];await InvokeModule("disconnect");});
     private async Task Guard(Func<Task> action){try{error=null;await action();}catch(OperationCanceledException){}catch(HttpRequestException ex)when(ex.StatusCode==System.Net.HttpStatusCode.Unauthorized){ClearSession();error=ex.Message;}catch(Exception ex){error=ex.Message;}await InvokeAsync(StateHasChanged);}
     private async Task ReloadConversations(){var query=search;var page=await Api.Get("conversations?take="+settings.ConversationPageSize+"&search="+Uri.EscapeDataString(query),NexusJson.Default.ConversationPage);if(query!=search)return;conversations=page.Items.ToList();conversationCursor=page.NextCursor;}
     private async Task LoadMoreConversations()=>await Guard(async()=>{if(loadingConversations||conversationCursor is null)return;loadingConversations=true;try{var page=await Api.Get("conversations?take="+settings.ConversationPageSize+"&cursor="+Uri.EscapeDataString(conversationCursor)+"&search="+Uri.EscapeDataString(search),NexusJson.Default.ConversationPage);conversations.AddRange(page.Items.Where(c=>!conversations.Any(x=>x.Id==c.Id)));conversationCursor=page.NextCursor;if(conversations.Count>500)conversations.RemoveRange(0,conversations.Count-500);}finally{loadingConversations=false;}});
-    private async Task ConversationsScrolled(){if(module is not null&&await module.InvokeAsync<bool>("sidebarNearEnd"))await LoadMoreConversations();}
+    private async Task ConversationsScrolled(){if(await InvokeModule<bool>("sidebarNearEnd"))await LoadMoreConversations();}
     private async Task SearchChanged(){searchCancel?.Cancel();searchCancel?.Dispose();searchCancel=new();try{await Task.Delay(300,searchCancel.Token);await Guard(ReloadConversations);}catch(OperationCanceledException){}}
     private async Task NewChat()=>await Guard(async()=>{var c=await Api.Send(HttpMethod.Post,"conversations",new CreateConversation("שיחה חדשה",model),NexusJson.Default.CreateConversation,NexusJson.Default.Conversation);await ReloadConversations();await SelectChat(c);});
     private async Task SelectChat(Conversation c)=>await Guard(async()=>
     {
-        selection?.Cancel();selection?.Dispose();selection=new();var ct=selection.Token;active=c;model=c.Model;prompt="";sidebarOpen=false;messages=[];streaming="";currentRun=null;attachments.Clear();if(module is not null)await module.InvokeVoidAsync("disconnect");
+        selection?.Cancel();selection?.Dispose();selection=new();var ct=selection.Token;active=c;model=c.Model;prompt="";sidebarOpen=false;messages=[];streaming="";currentRun=null;attachments.Clear();await InvokeModule("disconnect");
         var page=await Api.Get($"conversations/{c.Id}/messages?take={settings.MessagePageSize}",NexusJson.Default.MessagePage,ct);ct.ThrowIfCancellationRequested();messages=page.Items.ToList();hasMore=page.HasMore;hasNewer=false;Trim(false);await RefreshRuns();ct.ThrowIfCancellationRequested();currentRun=runs.FirstOrDefault(r=>r.ConversationId==c.Id&&IsActive(r));
         if(currentRun is not null)streamTask=WatchRun(currentRun.Id,ct);
-        await RefreshMessages();if(module is not null)await module.InvokeVoidAsync("bottom",true);
+        await RefreshMessages();await InvokeModule("bottom",true);
     });
     private async Task Latest(){if(active is not null)await SelectChat(active);}
     [JSInvokable] public async Task Older()=>await Guard(async()=>
     {
         if(loadingHistory||!hasMore||active is null||messages.Count==0)return;loadingHistory=true;var id=active.Id;
-        try{if(module is not null)await module.InvokeVoidAsync("captureAnchor");var page=await Api.Get($"conversations/{id}/messages?take={settings.MessagePageSize}&before={messages[0].Ordinal}",NexusJson.Default.MessagePage,selection?.Token??default);if(active?.Id!=id)return;messages.InsertRange(0,page.Items.Where(m=>!messages.Any(x=>x.Id==m.Id)));hasMore=page.HasMore;Trim(true);await RefreshMessages();if(module is not null)await module.InvokeVoidAsync("restoreAnchor");}finally{loadingHistory=false;}
+        try{await InvokeModule("captureAnchor");var page=await Api.Get($"conversations/{id}/messages?take={settings.MessagePageSize}&before={messages[0].Ordinal}",NexusJson.Default.MessagePage,selection?.Token??default);if(active?.Id!=id)return;messages.InsertRange(0,page.Items.Where(m=>!messages.Any(x=>x.Id==m.Id)));hasMore=page.HasMore;Trim(true);await RefreshMessages();await InvokeModule("restoreAnchor");}finally{loadingHistory=false;}
     });
     [JSInvokable] public async Task Newer()=>await Guard(async()=>
     {
         if(loadingHistory||!hasNewer||active is null||messages.Count==0)return;loadingHistory=true;var id=active.Id;
-        try{if(module is not null)await module.InvokeVoidAsync("captureAnchor");var page=await Api.Get($"conversations/{id}/messages?take={settings.MessagePageSize}&after={messages[^1].Ordinal}",NexusJson.Default.MessagePage,selection?.Token??default);if(active?.Id!=id)return;messages.AddRange(page.Items.Where(m=>!messages.Any(x=>x.Id==m.Id)));hasNewer=page.HasNewer;Trim(false);await RefreshMessages();if(module is not null)await module.InvokeVoidAsync("restoreAnchor");}finally{loadingHistory=false;}
+        try{await InvokeModule("captureAnchor");var page=await Api.Get($"conversations/{id}/messages?take={settings.MessagePageSize}&after={messages[^1].Ordinal}",NexusJson.Default.MessagePage,selection?.Token??default);if(active?.Id!=id)return;messages.AddRange(page.Items.Where(m=>!messages.Any(x=>x.Id==m.Id)));hasNewer=page.HasNewer;Trim(false);await RefreshMessages();await InvokeModule("restoreAnchor");}finally{loadingHistory=false;}
     });
     [JSInvokable] public async Task Prefetch(bool newer)
     {for(var i=0;i<settings.PrefetchPages;i++){if(newer)await Newer();else await Older();}}
@@ -238,7 +260,7 @@ else
             if(active?.Id==selectedBefore)
             {
                 if(prompt==input)prompt="";attachments.Clear();await SelectChat(target);
-                if(module is not null)await module.InvokeVoidAsync("bottom",true);
+                await InvokeModule("bottom",true);
             }
             await RefreshRuns();await ReloadConversations();
         }
@@ -265,7 +287,7 @@ else
                         if(Environment.TickCount64-lastRender>=settings.RenderIntervalMs||item.Kind=="complete")
                         {
                             streaming=buffer.ToString();currentRun=currentRun with{Status="running"};lastRender=Environment.TickCount64;
-                            await InvokeAsync(StateHasChanged);if(module is not null)await module.InvokeVoidAsync("bottom",false);
+                            await InvokeAsync(StateHasChanged);await InvokeModule("bottom",false);
                         }
                     }
                     var run=await Api.Get($"runs/{runId}",NexusJson.Default.Run,ct);ct.ThrowIfCancellationRequested();
@@ -291,12 +313,12 @@ else
     }
     private async Task RefreshRuns()=>runs=await Api.Get("runs",NexusJson.Default.RunArray,lifetime.Token);
     private async Task Poll(){try{while(!lifetime.IsCancellationRequested){await Task.Delay(5000,lifetime.Token);if(user is null)continue;try{await RefreshRuns();await InvokeAsync(StateHasChanged);}catch(HttpRequestException ex){if(ex.StatusCode==System.Net.HttpStatusCode.Unauthorized){ClearSession();await InvokeAsync(StateHasChanged);}}}}catch(OperationCanceledException){}}
-    private async Task Rename()=>await Guard(async()=>{if(active is null)return;var title=await JS.InvokeAsync<string?>("prompt","שם השיחה",active.Title);if(string.IsNullOrWhiteSpace(title))return;await Api.Save(HttpMethod.Patch,$"conversations/{active.Id}",new RenameConversation(title,active.Pinned),NexusJson.Default.RenameConversation);active=active with{Title=title};await ReloadConversations();});
+    private async Task Rename()=>await Guard(async()=>{if(active is null)return;var title=await InvokeJs<string?>("prompt","שם השיחה",active.Title);if(string.IsNullOrWhiteSpace(title))return;await Api.Save(HttpMethod.Patch,$"conversations/{active.Id}",new RenameConversation(title,active.Pinned),NexusJson.Default.RenameConversation);active=active with{Title=title};await ReloadConversations();});
     private async Task Pin()=>await Guard(async()=>{if(active is null)return;await Api.Save(HttpMethod.Patch,$"conversations/{active.Id}",new RenameConversation(active.Title,!active.Pinned),NexusJson.Default.RenameConversation);active=active with{Pinned=!active.Pinned};await ReloadConversations();});
-    private async Task Archive()=>await Guard(async()=>{if(active is null)return;await Api.Action(HttpMethod.Delete,$"conversations/{active.Id}");if(module is not null)await module.InvokeVoidAsync("disconnect");selection?.Cancel();active=null;currentRun=null;messages.Clear();streaming="";await ReloadConversations();});
+    private async Task Archive()=>await Guard(async()=>{if(active is null)return;await Api.Action(HttpMethod.Delete,$"conversations/{active.Id}");await InvokeModule("disconnect");selection?.Cancel();active=null;currentRun=null;messages.Clear();streaming="";await ReloadConversations();});
     private async Task Fork(Message message)=>await Guard(async()=>{var c=await Api.Send(HttpMethod.Post,$"conversations/{message.ConversationId}/fork",new ForkRequest(message.Id),NexusJson.Default.ForkRequest,NexusJson.Default.Conversation);await ReloadConversations();await SelectChat(c);});
     private async Task Edit(Message message)=>await Guard(async()=>{var c=await Api.Send(HttpMethod.Post,$"conversations/{message.ConversationId}/fork",new ForkRequest(message.Id,true),NexusJson.Default.ForkRequest,NexusJson.Default.Conversation);await ReloadConversations();await SelectChat(c);prompt=message.Content;});
-    private async Task Copy(string text)=>await Guard(async()=>await JS.InvokeVoidAsync("navigator.clipboard.writeText",text));
+    private async Task Copy(string text)=>await Guard(async()=>await InvokeJs("navigator.clipboard.writeText",text));
     private void SetFields(){conversationPageSize=settings.ConversationPageSize;prefetchPages=settings.PrefetchPages;pageSize=settings.MessagePageSize;bufferTurns=settings.MaxBufferedTurns;bufferMb=settings.MaxBufferedBytes/1048576;overscan=settings.OverscanCount;renderMs=settings.RenderIntervalMs;contextTurns=settings.Generation.ContextMaxTurns;tokenBudget=settings.Generation.ContextTokenBudget;outputTokens=settings.Generation.MaxOutputTokens;temperature=settings.Generation.Temperature;systemInstruction=settings.Generation.SystemInstruction;advancedJson=settings.Generation.AdvancedJson;}
     private GenerationSettings Generation()=>new(){ContextMaxTurns=contextTurns,ContextTokenBudget=tokenBudget,MaxOutputTokens=outputTokens,Temperature=temperature,SystemInstruction=systemInstruction,AdvancedJson=advancedJson};
     private async Task SaveSettings()=>await Guard(async()=>{var updated=settings with{ConversationPageSize=conversationPageSize,PrefetchPages=prefetchPages,MessagePageSize=pageSize,MaxBufferedTurns=bufferTurns,MaxBufferedBytes=bufferMb*1048576,OverscanCount=overscan,RenderIntervalMs=renderMs,Generation=Generation()};await Api.Save(HttpMethod.Put,"settings",updated,NexusJson.Default.WorkspaceSettings);settings=updated;setupNeeded=true;Trim(false);await RefreshMessages();panel=null;});
@@ -304,12 +326,16 @@ else
     private async Task AddPlugin()=>await Guard(async()=>{var config=new System.Text.Json.Nodes.JsonObject{["text"]=pluginText,["find"]=pluginFind}.ToJsonString();await Api.Save(HttpMethod.Put,"plugins",new PluginDefinition(Guid.NewGuid().ToString("N"),pluginName,pluginKind,"1",pluginExecution,true,config),NexusJson.Default.PluginDefinition);plugins=await Api.Get("plugins",NexusJson.Default.PluginList);pluginName=pluginText=pluginFind="";});
     private async Task TogglePlugin(PluginDefinition plugin)=>await Guard(async()=>{await Api.Save(HttpMethod.Put,"plugins",plugin with{Enabled=!plugin.Enabled},NexusJson.Default.PluginDefinition);plugins=await Api.Get("plugins",NexusJson.Default.PluginList);});
     private async Task DeletePlugin(PluginDefinition plugin)=>await Guard(async()=>{await Api.Action(HttpMethod.Delete,"plugins/"+plugin.Id);plugins=await Api.Get("plugins",NexusJson.Default.PluginList);});
-    private async Task Explore()=>await Guard(async()=>{busy=true;try{if(labMethod!="GET"&&!await JS.InvokeAsync<bool>("confirm","לשלוח בקשה שעשויה לשנות משאבים או לצרוך מכסה?"))return;var response=await Api.Send(HttpMethod.Post,"explorer",new PlaygroundRequest(labMethod,labPath,labBody),NexusJson.Default.PlaygroundRequest,NexusJson.Default.PlaygroundResponse);labResult=$"HTTP {response.Status}\n{Pretty(response.Body)}";}finally{busy=false;}});
+    private async Task Explore()=>await Guard(async()=>{busy=true;try{if(labMethod!="GET"&&!await InvokeJs<bool>("confirm","לשלוח בקשה שעשויה לשנות משאבים או לצרוך מכסה?"))return;var response=await Api.Send(HttpMethod.Post,"explorer",new PlaygroundRequest(labMethod,labPath,labBody),NexusJson.Default.PlaygroundRequest,NexusJson.Default.PlaygroundResponse);labResult=$"HTTP {response.Status}\n{Pretty(response.Body)}";}finally{busy=false;}});
     private async Task Inspect(string run){inspectedRun=run;panel="debug";await RefreshDebug();}
     private async Task DebugRunChanged(ChangeEventArgs e){inspectedRun=e.Value?.ToString()??"";await RefreshDebug();}
     private async Task RefreshDebug()=>await Guard(async()=>{debugEvents=[];debugMetrics=null;debugMore=true;if(inspectedRun.Length>0){debugMetrics=await Api.Get($"runs/{inspectedRun}/metrics",NexusJson.Default.RunMetrics);await LoadDebug();}});
     private async Task LoadDebug()=>await Guard(async()=>{if(inspectedRun.Length==0)return;var after=debugEvents.LastOrDefault()?.Sequence??0;var page=await Api.Get($"runs/{inspectedRun}/events?format=json&after={after}",NexusJson.Default.RunEventPage);debugEvents.AddRange(page.Items);debugMore=page.HasMore;long bytes=debugEvents.Sum(e=>(long)e.Json.Length*2);while(debugEvents.Count>1&&(debugEvents.Count>200||bytes>settings.MaxBufferedBytes)){bytes-=debugEvents[0].Json.Length*2L;debugEvents.RemoveAt(0);}});
     private string Usage(string name){if(debugMetrics is not null){using var metrics=JsonDocument.Parse(debugMetrics.UsageJson);if(metrics.RootElement.TryGetProperty(name,out var number))return number.ToString();}foreach(var ev in debugEvents.AsEnumerable().Reverse().Where(e=>e.Kind=="provider")){using var d=JsonDocument.Parse(ev.Json);if(d.RootElement.TryGetProperty("usageMetadata",out var u)&&u.TryGetProperty(name,out var n))return n.ToString();}return "לא דווח";}
     private static string Pretty(string json){try{using var doc=JsonDocument.Parse(json);using var memory=new MemoryStream();using(var writer=new Utf8JsonWriter(memory,new(){Indented=true})){doc.RootElement.WriteTo(writer);}return System.Text.Encoding.UTF8.GetString(memory.ToArray());}catch(JsonException){return json;}}
+    private async ValueTask InvokeJs(string identifier,params object?[] arguments){try{await JS.InvokeVoidAsync(identifier,arguments);}catch(JSDisconnectedException){}}
+    private async ValueTask<T?> InvokeJs<T>(string identifier,params object?[] arguments){try{return await JS.InvokeAsync<T>(identifier,arguments);}catch(JSDisconnectedException){return default;}}
+    private async ValueTask InvokeModule(string identifier,params object?[] arguments){if(module is null)return;try{await module.InvokeVoidAsync(identifier,arguments);}catch(JSDisconnectedException){}}
+    private async ValueTask<T?> InvokeModule<T>(string identifier,params object?[] arguments){if(module is null)return default;try{return await module.InvokeAsync<T>(identifier,arguments);}catch(JSDisconnectedException){return default;}}
     public async ValueTask DisposeAsync(){lifetime.Cancel();selection?.Cancel();searchCancel?.Cancel();if(polling is not null)await polling;if(streamTask is not null)await streamTask;if(module is not null){try{await module.InvokeVoidAsync("dispose");await module.DisposeAsync();}catch(JSDisconnectedException){}}reference?.Dispose();selection?.Dispose();searchCancel?.Dispose();lifetime.Dispose();}
 }

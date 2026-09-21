@@ -19,9 +19,20 @@ public sealed class ServerOptions(IConfiguration config)
     public string DefaultModel { get; } = config["Gemini:DefaultModel"] ?? "gemini-3.8-flash";
     public string ApiKey { get; } = ReadSecret(config, "Gemini:ApiKey", "Gemini:ApiKeyFile");
     public string ApiBaseUrl { get; } = config["Gemini:BaseUrl"] ?? "https://generativelanguage.googleapis.com/v1beta/";
+    public string LiveApiUrl { get; } = config["Gemini:LiveUrl"] ?? "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
     public string AdminName { get; } = config["Auth:AdminName"] ?? "admin";
     public string AdminPassword { get; } = ReadSecret(config, "Auth:AdminPassword", "Auth:AdminPasswordFile");
     public bool AllowInsecureLocal { get; } = config["Auth:AllowInsecureLocal"] == "true";
+    public string PluginDirectory { get; } = config["Plugins:Directory"] ?? "data/plugins";
+    public string WasmtimePath { get; } = config["Plugins:WasmtimePath"] ?? "wasmtime";
+    public int PluginTimeoutSeconds { get; } = Read(config,"Plugins:TimeoutSeconds",10,1,60);
+    public string PasswordResetPublicBaseUrl { get; } = config["PasswordReset:PublicBaseUrl"] ?? "";
+    public string PasswordResetPickupDirectory { get; } = config["PasswordReset:PickupDirectory"] ?? "";
+    public string SmtpHost { get; } = config["PasswordReset:Smtp:Host"] ?? "";
+    public int SmtpPort { get; } = Read(config,"PasswordReset:Smtp:Port",587,1,65535);
+    public string SmtpUser { get; } = config["PasswordReset:Smtp:User"] ?? "";
+    public string SmtpPassword { get; } = ReadSecret(config,"PasswordReset:Smtp:Password","PasswordReset:Smtp:PasswordFile");
+    public string SmtpFrom { get; } = config["PasswordReset:Smtp:From"] ?? "";
     private static int Read(IConfiguration config, string key, int fallback, int min, int max)
     {
         if (config[key] is not { } value) return fallback;

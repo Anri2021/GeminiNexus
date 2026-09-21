@@ -56,6 +56,11 @@ builder.Services.AddHttpClient("Gemini",c=>{c.BaseAddress=baseUri;c.Timeout=Time
 builder.Services.AddSingleton<WorkspaceStore>();builder.Services.AddSingleton<IWorkspaceStore>(s=>s.GetRequiredService<WorkspaceStore>());
 builder.Services.AddSingleton<GeminiProvider>();builder.Services.AddSingleton<IChatProvider>(s=>s.GetRequiredService<GeminiProvider>());
 builder.Services.AddSingleton<IModelCatalog>(s=>s.GetRequiredService<GeminiProvider>());builder.Services.AddSingleton<ITokenCounter>(s=>s.GetRequiredService<GeminiProvider>());builder.Services.AddSingleton<IProviderExplorer>(s=>s.GetRequiredService<GeminiProvider>());
+builder.Services.AddSingleton<IProviderOperations>(s=>s.GetRequiredService<GeminiProvider>());
+builder.Services.AddSingleton<ToolExecutor>();
+builder.Services.AddSingleton<PluginPackageService>();
+builder.Services.AddSingleton<PasswordResetService>();
+builder.Services.AddSingleton<ExecuteProviderOperationHandler>();builder.Services.AddSingleton<GetProviderOperationsHandler>();
 builder.Services.AddSingleton<RunCoordinator>();builder.Services.AddHostedService(s=>s.GetRequiredService<RunCoordinator>());
 builder.Services.AddFastEndpoints(DiscoveredTypes.All);
 builder.Services.AddHsts(o=>{o.MaxAge=TimeSpan.FromDays(365);o.IncludeSubDomains=false;});
@@ -90,7 +95,9 @@ app.Use(async(context,next)=>
     }
 });
 app.UseAuthentication();app.UseRateLimiter();app.UseAuthorization();
+app.UseWebSockets(new WebSocketOptions{KeepAliveInterval=TimeSpan.FromSeconds(20),AllowedOrigins={}});
+LiveGateway.Map(app,options);
 app.MapGet("/health/live",()=>TypedResults.Json(new HealthStatus("ok"),NexusJson.Default.HealthStatus));
-app.MapGet("/health/ready",async(WorkspaceStore store,CancellationToken ct)=>{await using var db=await store.Open(ct);await using var command=db.CreateCommand();command.CommandText="SELECT 1";await command.ExecuteScalarAsync(ct);return TypedResults.Json(new HealthStatus("ready"),NexusJson.Default.HealthStatus);});
+app.MapGet("/health/ready",async(WorkspaceStore store,CancellationToken ct)=>{await using var db=await store.Open(ct);await using var command=db.CreateCommand();command.CommandText="SELECT COALESCE(MAX(Version),0) FROM SchemaMigrations";var schema=Convert.ToInt32(await command.ExecuteScalarAsync(ct));if(schema!=DatabaseMigrations.LatestVersion)throw new InvalidOperationException("Database schema is not current");var depth=await store.QueueDepth(ct);return TypedResults.Json(new ReadinessStatus("ready",schema,options.DatabaseProvider,depth.Queued,depth.Running),NexusJson.Default.ReadinessStatus);});
 app.UseFastEndpoints(c=>c.Serializer.Options.TypeInfoResolverChain.Insert(0,NexusJson.Default));
 app.Run();

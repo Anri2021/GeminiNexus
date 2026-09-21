@@ -8,11 +8,10 @@ Type=simple
 User=gemininexus
 Group=gemininexus
 WorkingDirectory=/srv/gemininexus/server
-ExecStart=/usr/bin/dotnet /srv/gemininexus/server/GeminiNexus.Server.dll
+ExecStart=/srv/gemininexus/server/GeminiNexus.Server
 EnvironmentFile=/etc/gemininexus/server.env
 Environment=ASPNETCORE_ENVIRONMENT=Production
 Environment=Urls=http://127.0.0.1:5000
-Environment=Database__ConnectionString="Data Source=/var/lib/gemininexus/nexus.db;Default Timeout=15"
 Environment=Auth__KeyPath=/var/lib/gemininexus/keys
 StateDirectory=gemininexus
 Restart=on-failure

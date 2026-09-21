@@ -1,6 +1,9 @@
 using System.Data;
 using System.Data.Common;
 using System.Text.Json;
+#if !NEXUS_NATIVE_AOT
+using Dapper;
+#endif
 using GeminiNexus.Server.Application;
 using GeminiNexus.Server.Domain;
 using GeminiNexus.Server.Security;
@@ -20,6 +23,9 @@ public interface IWorkspaceStore
 }
 
 // Explicit ADO.NET mapping is reflection-free and shared by SQLite and PostgreSQL.
+#if !NEXUS_NATIVE_AOT
+[DapperAot]
+#endif
 public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
 {
     private readonly SemaphoreSlim writeGate = new(1, 1);
@@ -53,23 +59,7 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
         }
         await using var db = await Open(ct);
         if (db is SqliteConnection) await Execute(db, "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;", null, ct);
-        await Execute(db, """
-        CREATE TABLE IF NOT EXISTS NexusUsers(Id TEXT PRIMARY KEY, Name TEXT NOT NULL UNIQUE, PasswordHash TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS AuthSessions(Id TEXT PRIMARY KEY, UserId TEXT NOT NULL, ExpiresAt BIGINT NOT NULL, FOREIGN KEY(UserId) REFERENCES NexusUsers(Id) ON DELETE CASCADE);
-        CREATE INDEX IF NOT EXISTS IX_AuthSessions_User ON AuthSessions(UserId);
-        CREATE TABLE IF NOT EXISTS Conversations(Id TEXT PRIMARY KEY, OwnerId TEXT NOT NULL, Title TEXT NOT NULL, Model TEXT NOT NULL, UpdatedAt TEXT NOT NULL, Pinned INTEGER NOT NULL DEFAULT 0, Archived INTEGER NOT NULL DEFAULT 0);
-        CREATE INDEX IF NOT EXISTS IX_Conversations_Owner ON Conversations(OwnerId, Archived, Pinned, UpdatedAt, Id);
-        CREATE TABLE IF NOT EXISTS Messages(Id TEXT PRIMARY KEY, ConversationId TEXT NOT NULL, RunId TEXT NOT NULL, Ordinal BIGINT NOT NULL, Role TEXT NOT NULL, Content TEXT NOT NULL, PartsJson TEXT NOT NULL, CreatedAt TEXT NOT NULL, Status TEXT NOT NULL, UNIQUE(ConversationId, Ordinal));
-        CREATE TABLE IF NOT EXISTS Runs(Id TEXT PRIMARY KEY, OwnerId TEXT NOT NULL, ConversationId TEXT NOT NULL, Model TEXT NOT NULL, Status TEXT NOT NULL, CreatedAt TEXT NOT NULL, UpdatedAt TEXT NOT NULL, LastSequence BIGINT NOT NULL DEFAULT 0, Error TEXT, CancelRequested INTEGER NOT NULL DEFAULT 0, IdempotencyKey TEXT NOT NULL, RequestJson TEXT NOT NULL, LeaseOwner TEXT, LeaseUntil BIGINT NOT NULL DEFAULT 0, UNIQUE(OwnerId, IdempotencyKey));
-        CREATE INDEX IF NOT EXISTS IX_Runs_Queue ON Runs(Status, CreatedAt);
-        CREATE INDEX IF NOT EXISTS IX_Runs_Owner ON Runs(OwnerId, ConversationId, Status);
-        CREATE TABLE IF NOT EXISTS RunEvents(RunId TEXT NOT NULL, Sequence BIGINT NOT NULL, Kind TEXT NOT NULL, Json TEXT NOT NULL, CreatedAt TEXT NOT NULL, PRIMARY KEY(RunId, Sequence));
-        CREATE TABLE IF NOT EXISTS RunMetrics(RunId TEXT PRIMARY KEY, Json TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS RunFingerprints(RunId TEXT PRIMARY KEY, Hash TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS Outbox(RunId TEXT PRIMARY KEY, CreatedAt TEXT NOT NULL, Delivered INTEGER NOT NULL DEFAULT 0);
-        CREATE TABLE IF NOT EXISTS Preferences(OwnerId TEXT PRIMARY KEY, Json TEXT NOT NULL);
-        CREATE TABLE IF NOT EXISTS Plugins(OwnerId TEXT NOT NULL, Id TEXT NOT NULL, Json TEXT NOT NULL, PRIMARY KEY(OwnerId, Id));
-        """, null, ct);
+        await DatabaseMigrations.Apply(db, options, ct);
         if (options.AdminPassword.Length < 16) throw new InvalidOperationException("Auth:AdminPassword must contain at least 16 characters (or supply Auth:AdminPasswordFile).");
         // Revoke only when the configured administrator password actually changed.
         await using var tx=await db.BeginTransactionAsync(ct);
@@ -90,13 +80,20 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
         if (!await r.ReadAsync(ct)) { Passwords.Verify(password, Passwords.Hash("unavailable-user")); return null; }
         return Passwords.Verify(password, r.GetString(2)) ? new(r.GetString(0), r.GetString(1), r.GetString(1)==options.AdminName) : null;
     }
-    public async Task<UserInfo> AddUser(string name, string password, CancellationToken ct)
+    public async Task<UserInfo> AddUser(string name, string password,string email,CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(name) || name.Length > 80 || password.Length is < 16 or > 1024) throw new WorkspaceException(400, "שם או סיסמה אינם תקינים");
+        email=email.Trim().ToLowerInvariant();
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 80 || password.Length is < 16 or > 1024||email.Length>320||email.Length>0&&(!email.Contains('@')||email.StartsWith('@')||email.EndsWith('@'))) throw new WorkspaceException(400, "שם, כתובת דוא״ל או סיסמה אינם תקינים");
         var user = new UserInfo(Guid.NewGuid().ToString("N"), name);
-        await using var db = await Open(ct);
-        var changed=await Execute(db, "INSERT INTO NexusUsers VALUES(@id,@name,@hash) ON CONFLICT(Name) DO NOTHING", null, ct, ("id",user.Id),("name",name),("hash",Passwords.Hash(password)));
-        if(changed==0)throw new WorkspaceException(409,"שם המשתמש כבר קיים");return user;
+        await using var db = await Open(ct);await using var tx=await db.BeginTransactionAsync(ct);
+        var changed=await Execute(db, "INSERT INTO NexusUsers VALUES(@id,@name,@hash) ON CONFLICT(Name) DO NOTHING",tx,ct,("id",user.Id),("name",name),("hash",Passwords.Hash(password)));
+        if(changed==0)throw new WorkspaceException(409,"שם המשתמש כבר קיים");
+        if(email.Length>0)
+        {
+            try{await Execute(db,"INSERT INTO UserEmails(UserId,Email) VALUES(@id,@email)",tx,ct,("id",user.Id),("email",email));}
+            catch(DbException){throw new WorkspaceException(409,"כתובת הדוא״ל כבר משויכת לחשבון");}
+        }
+        await tx.CommitAsync(ct);return user;
     }
     public async Task<string> CreateSession(string user,CancellationToken ct)
     {
@@ -112,8 +109,31 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
     {await using var db=await Open(ct);await Execute(db,"DELETE FROM AuthSessions WHERE UserId=@user AND (@session='' OR Id=@session)",null,ct,("user",user),("session",session??""));}
     public async Task<UserAccount[]> Users(CancellationToken ct)
     {
-        await using var db=await Open(ct);await using var cmd=Command(db,"SELECT u.Id,u.Name,(SELECT COUNT(*) FROM AuthSessions s WHERE s.UserId=u.Id AND s.ExpiresAt>@now) FROM NexusUsers u ORDER BY u.Name",null,("now",DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
-        var users=new List<UserAccount>();await using var r=await cmd.ExecuteReaderAsync(ct);while(await r.ReadAsync(ct))users.Add(new(r.GetString(0),r.GetString(1),Convert.ToInt32(r.GetValue(2))));return users.ToArray();
+        await using var db=await Open(ct);await using var cmd=Command(db,"SELECT u.Id,u.Name,(SELECT COUNT(*) FROM AuthSessions s WHERE s.UserId=u.Id AND s.ExpiresAt>@now),COALESCE(e.Email,'') FROM NexusUsers u LEFT JOIN UserEmails e ON e.UserId=u.Id ORDER BY u.Name",null,("now",DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        var users=new List<UserAccount>();await using var r=await cmd.ExecuteReaderAsync(ct);while(await r.ReadAsync(ct))users.Add(new(r.GetString(0),r.GetString(1),Convert.ToInt32(r.GetValue(2)),r.GetString(3)));return users.ToArray();
+    }
+    public async Task<(string Email,string Token)?> CreatePasswordReset(string email,CancellationToken ct)
+    {
+        email=email.Trim().ToLowerInvariant();if(email.Length is <3 or >320)return null;
+        await using var db=await Open(ct);await using var find=Command(db,"SELECT e.UserId,e.Email FROM UserEmails e JOIN NexusUsers u ON u.Id=e.UserId WHERE e.Email=@email AND u.Name<>@admin",null,("email",email),("admin",options.AdminName));
+        string user,address;await using(var reader=await find.ExecuteReaderAsync(ct)){if(!await reader.ReadAsync(ct))return null;user=reader.GetString(0);address=reader.GetString(1);}
+        var token=Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(32)).TrimEnd('=').Replace('+','-').Replace('/','_');
+        var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token)));var now=DateTimeOffset.UtcNow;
+        await Execute(db,"DELETE FROM PasswordResetTokens WHERE UserId=@user OR ExpiresAt<=@now",null,ct,("user",user),("now",now.ToUnixTimeSeconds()));
+        await Execute(db,"INSERT INTO PasswordResetTokens(TokenHash,UserId,ExpiresAt,UsedAt,CreatedAt) VALUES(@hash,@user,@expires,NULL,@created)",null,ct,("hash",hash),("user",user),("expires",now.AddMinutes(30).ToUnixTimeSeconds()),("created",now.ToString("O")));
+        return(address,token);
+    }
+    public async Task ResetPassword(string token,string password,CancellationToken ct)
+    {
+        if(token.Length is <32 or >256||password.Length is <16 or >1024)throw new WorkspaceException(400,"אסימון או סיסמה אינם תקינים");
+        var hash=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(System.Text.Encoding.UTF8.GetBytes(token)));var now=DateTimeOffset.UtcNow.ToUnixTimeSeconds();
+        await using var db=await Open(ct);await using var tx=await db.BeginTransactionAsync(IsolationLevel.Serializable,ct);
+        await using var find=Command(db,"SELECT t.UserId FROM PasswordResetTokens t JOIN NexusUsers u ON u.Id=t.UserId WHERE t.TokenHash=@hash AND t.UsedAt IS NULL AND t.ExpiresAt>@now AND u.Name<>@admin",tx,("hash",hash),("now",now),("admin",options.AdminName));
+        var user=await find.ExecuteScalarAsync(ct) as string;if(user is null)throw new WorkspaceException(400,"אסימון האיפוס אינו תקף או שפג תוקפו");
+        await Execute(db,"UPDATE NexusUsers SET PasswordHash=@password WHERE Id=@user",tx,ct,("password",Passwords.Hash(password)),("user",user));
+        await Execute(db,"DELETE FROM AuthSessions WHERE UserId=@user",tx,ct,("user",user));
+        var changed=await Execute(db,"UPDATE PasswordResetTokens SET UsedAt=@now WHERE TokenHash=@hash AND UsedAt IS NULL",tx,ct,("now",now),("hash",hash));if(changed!=1)throw new WorkspaceException(400,"אסימון האיפוס כבר נוצל");
+        await tx.CommitAsync(ct);
     }
     public async Task UpdatePassword(string owner,ChangePassword request,CancellationToken ct)
     {
@@ -212,6 +232,8 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
         try
         {
             await using var db=await Open(ct);await using var tx=await db.BeginTransactionAsync(IsolationLevel.Serializable,ct);
+            if(options.DatabaseProvider.Equals("Postgres",StringComparison.OrdinalIgnoreCase))
+                await Execute(db,"SELECT pg_advisory_xact_lock(hashtext(@owner),hashtext(@conversation))",tx,ct,("owner",owner),("conversation",request.ConversationId));
             await RequireOwner(db,owner,request.ConversationId,ct,tx);
             var fingerprint=Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(JsonSerializer.SerializeToUtf8Bytes(request,NexusJson.Default.SubmitRun)));
             Run? previous=null;
@@ -232,10 +254,10 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
             // Preserve all provider parts, including thought signatures and tool responses.
             var contents=new System.Text.Json.Nodes.JsonArray();
             foreach(var m in history.Where(m=>m.Status=="completed"))
-                contents.Add(new System.Text.Json.Nodes.JsonObject{["role"]=m.Role,["parts"]=System.Text.Json.Nodes.JsonNode.Parse(m.PartsJson)});
-            var parts=new System.Text.Json.Nodes.JsonArray{new System.Text.Json.Nodes.JsonObject{["text"]=request.Prompt}};
-            foreach(var a in request.Attachments??[])parts.Add(new System.Text.Json.Nodes.JsonObject{["inlineData"]=new System.Text.Json.Nodes.JsonObject{["mimeType"]=a.MimeType,["data"]=a.Data}});
-            contents.Add(new System.Text.Json.Nodes.JsonObject{["role"]="user",["parts"]=parts.DeepClone()});
+                contents.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject{["role"]=m.Role,["parts"]=System.Text.Json.Nodes.JsonNode.Parse(m.PartsJson)});
+            var parts=new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject{["text"]=request.Prompt});
+            foreach(var a in request.Attachments??[])parts.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject{["inlineData"]=new System.Text.Json.Nodes.JsonObject{["mimeType"]=a.MimeType,["data"]=a.Data}});
+            contents.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject{["role"]="user",["parts"]=parts.DeepClone()});
             var run=new Run(Guid.NewGuid().ToString("N"),request.ConversationId,request.Model,"queued",Now,Now,0,null,false);
             var stored=JsonSerializer.Serialize(new StoredRunRequest(request,contents.ToJsonString()),NexusJson.Default.StoredRunRequest);
             await Execute(db,"INSERT INTO Runs(Id,OwnerId,ConversationId,Model,Status,CreatedAt,UpdatedAt,IdempotencyKey,RequestJson) VALUES(@id,@o,@c,@m,'queued',@t,@t,@k,@j)",tx,ct,("id",run.Id),("o",owner),("c",run.ConversationId),("m",run.Model),("t",run.CreatedAt),("k",request.IdempotencyKey),("j",stored));
@@ -273,13 +295,20 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
         await writeGate.WaitAsync(ct);
         try
         {
-            await using var db=await Open(ct);await using var tx=await db.BeginTransactionAsync(IsolationLevel.Serializable,ct);
-            await using var cmd=Command(db,"""
+            await using var db=await Open(ct);await using var tx=await db.BeginTransactionAsync(options.DatabaseProvider.Equals("Postgres",StringComparison.OrdinalIgnoreCase)?IsolationLevel.ReadCommitted:IsolationLevel.Serializable,ct);
+            var claimSql=options.DatabaseProvider.Equals("Postgres",StringComparison.OrdinalIgnoreCase)?"""
+            SELECT r.Id,r.ConversationId,r.Model,r.Status,r.CreatedAt,r.UpdatedAt,r.LastSequence,r.Error,r.CancelRequested,r.OwnerId,r.RequestJson
+            FROM Runs r JOIN Outbox o ON o.RunId=r.Id WHERE r.Status='queued' AND o.Delivered=0
+            AND (SELECT COUNT(*) FROM Runs active WHERE active.OwnerId=r.OwnerId AND active.Status='running')<@max
+            AND pg_try_advisory_xact_lock(hashtext(r.OwnerId))
+            ORDER BY r.CreatedAt LIMIT 1 FOR UPDATE OF r SKIP LOCKED
+            """:"""
             SELECT r.Id,r.ConversationId,r.Model,r.Status,r.CreatedAt,r.UpdatedAt,r.LastSequence,r.Error,r.CancelRequested,r.OwnerId,r.RequestJson
             FROM Runs r JOIN Outbox o ON o.RunId=r.Id WHERE r.Status='queued' AND o.Delivered=0
             AND (SELECT COUNT(*) FROM Runs active WHERE active.OwnerId=r.OwnerId AND active.Status='running')<@max
             ORDER BY r.CreatedAt LIMIT 1
-            """,tx,("max",options.PerUserConcurrency));
+            """;
+            await using var cmd=Command(db,claimSql,tx,("max",options.PerUserConcurrency));
             Run run;string owner;StoredRunRequest request;
             await using(var r=await cmd.ExecuteReaderAsync(ct))
             {if(!await r.ReadAsync(ct))return null;run=RunFrom(r);owner=r.GetString(9);request=JsonSerializer.Deserialize(r.GetString(10),NexusJson.Default.StoredRunRequest)!;}
@@ -322,6 +351,7 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
     {
         await using var db=await Open(ct);
         await Execute(db,"DELETE FROM AuthSessions WHERE ExpiresAt<=@now",null,ct,("now",DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
+        await Execute(db,"DELETE FROM PasswordResetTokens WHERE ExpiresAt<=@now OR UsedAt IS NOT NULL",null,ct,("now",DateTimeOffset.UtcNow.ToUnixTimeSeconds()));
         // Recover visible partial responses without repeating potentially billed generation.
         var expired=new List<(string Id,string Owner,string Worker)>();
         await using(var cmd=Command(db,"SELECT Id,OwnerId,LeaseOwner FROM Runs WHERE Status='running' AND LeaseUntil<@now",null,("now",DateTimeOffset.UtcNow.ToUnixTimeSeconds())))
@@ -342,6 +372,7 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
             await Finish(run.Id,run.Worker,text.ToString(),parts.ToJsonString(),"interrupted","העיבוד נקטע עקב הפסקת שרת; אפשר לנסות שוב במפורש",ct,expiredOnly:true);
         }
         await Execute(db,"DELETE FROM RunEvents WHERE CreatedAt<@cutoff AND RunId IN (SELECT Id FROM Runs WHERE Status NOT IN ('queued','running'))",null,ct,("cutoff",DateTimeOffset.UtcNow.AddDays(-options.TraceRetentionDays).ToString("O")));
+        await ApplyRetention(ct);
     }
     public async Task<RunEvent[]> Events(string owner,string id,long after,int take,CancellationToken ct)
     {
@@ -380,11 +411,83 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
     }
     public async Task SavePlugin(string owner,PluginDefinition plugin,CancellationToken ct)
     {
-        if(plugin.Id.Length is <1 or >80||plugin.Name.Length is <1 or >120||!PluginEngine.Kinds.Contains(plugin.Kind)||plugin.Execution is not ("local" or "server")||plugin.ConfigurationJson.Length>16384||plugin.Version!="1")throw new WorkspaceException(400,"הגדרת התוסף אינה נתמכת");
+        if(plugin.Id.Length is <1 or >80||plugin.Name.Length is <1 or >120||!PluginEngine.Kinds.Contains(plugin.Kind)||plugin.Execution is not ("local" or "server" or "auto" or "browser" or "maui")||plugin.ConfigurationJson.Length>16384||(plugin.Kind!="wasm"&&plugin.Version!="1"))throw new WorkspaceException(400,"הגדרת התוסף אינה נתמכת");
         using var json=JsonDocument.Parse(plugin.ConfigurationJson);if(json.RootElement.ValueKind!=JsonValueKind.Object)throw new WorkspaceException(400,"נדרש אובייקט הגדרות");
         foreach(var field in new[]{"text","find"})if(json.RootElement.TryGetProperty(field,out var value)&&value.ValueKind!=JsonValueKind.String)throw new WorkspaceException(400,"ערכי התוסף חייבים להיות טקסט");
         await using var db=await Open(ct);await Execute(db,"INSERT INTO Plugins VALUES(@o,@id,@j) ON CONFLICT(OwnerId,Id) DO UPDATE SET Json=excluded.Json",null,ct,("o",owner),("id",plugin.Id),("j",JsonSerializer.Serialize(plugin,NexusJson.Default.PluginDefinition)));
     }
     public async Task DeletePlugin(string owner,string id,CancellationToken ct)
-    {await using var db=await Open(ct);await Execute(db,"DELETE FROM Plugins WHERE OwnerId=@o AND Id=@id",null,ct,("o",owner),("id",id));}
+    {await using var db=await Open(ct);await using var tx=await db.BeginTransactionAsync(ct);await Execute(db,"DELETE FROM Plugins WHERE OwnerId=@o AND Id=@id",tx,ct,("o",owner),("id",id));await Execute(db,"DELETE FROM PluginPackages WHERE OwnerId=@o AND Id=@id",tx,ct,("o",owner),("id",id));await tx.CommitAsync(ct);}
+
+    public async Task SavePluginPackage(string owner,PluginDefinition plugin,CancellationToken ct)
+    {
+        await using var db=await Open(ct);await using var tx=await db.BeginTransactionAsync(ct);
+        await Execute(db,"INSERT INTO PluginPackages(OwnerId,Id,Version,ManifestJson,PackageReference,PackageHash,InstalledAt) VALUES(@o,@id,@v,@m,@p,@h,@t) ON CONFLICT(OwnerId,Id) DO UPDATE SET Version=excluded.Version,ManifestJson=excluded.ManifestJson,PackageReference=excluded.PackageReference,PackageHash=excluded.PackageHash,InstalledAt=excluded.InstalledAt",tx,ct,
+            ("o",owner),("id",plugin.Id),("v",plugin.Version),("m",JsonSerializer.Serialize(plugin.Manifest,NexusJson.Default.PluginManifest)),("p",plugin.PackageReference),("h",plugin.PackageHash),("t",Now));
+        await Execute(db,"INSERT INTO Plugins VALUES(@o,@id,@j) ON CONFLICT(OwnerId,Id) DO UPDATE SET Json=excluded.Json",tx,ct,("o",owner),("id",plugin.Id),("j",JsonSerializer.Serialize(plugin,NexusJson.Default.PluginDefinition)));await tx.CommitAsync(ct);
+    }
+
+    public async Task<PluginDefinition?> FindPluginForTool(string runId,string tool,CancellationToken ct)
+    {
+        await using var db=await Open(ct);await using var cmd=Command(db,"SELECT p.Json FROM Plugins p JOIN Runs r ON r.OwnerId=p.OwnerId WHERE r.Id=@r",null,("r",runId));await using var reader=await cmd.ExecuteReaderAsync(ct);
+        while(await reader.ReadAsync(ct)){var plugin=JsonSerializer.Deserialize(reader.GetString(0),NexusJson.Default.PluginDefinition);if(plugin is {Enabled:true,Kind:"wasm",Manifest:not null}&&plugin.Execution is "server" or "auto"&&plugin.Manifest.Tools.Any(x=>x.Name==tool))return plugin;}
+        return null;
+    }
+
+    public async Task SaveProviderOperation(string owner,ProviderOperation operation,CancellationToken ct)
+    {
+        await using var db=await Open(ct);
+        await Execute(db,"INSERT INTO ProviderOperations(Id,OwnerId,Capability,ProviderName,Status,RequestJson,ResponseJson,CreatedAt,UpdatedAt) VALUES(@id,@o,@c,@n,@s,@q,@r,@t,@u)",null,ct,
+            ("id",operation.Id),("o",owner),("c",operation.Capability),("n",operation.ProviderName),("s",operation.Status),("q",operation.RequestJson),("r",operation.ResponseJson),("t",operation.CreatedAt),("u",operation.UpdatedAt));
+    }
+
+    public async Task<ProviderOperationList> ProviderOperations(string owner,CancellationToken ct)
+    {
+        await using var db=await Open(ct);await using var cmd=Command(db,"SELECT Id,Capability,ProviderName,Status,RequestJson,ResponseJson,CreatedAt,UpdatedAt FROM ProviderOperations WHERE OwnerId=@o ORDER BY UpdatedAt DESC,Id DESC LIMIT 100",null,("o",owner));
+        var list=new List<ProviderOperation>();await using var reader=await cmd.ExecuteReaderAsync(ct);
+        while(await reader.ReadAsync(ct))list.Add(new(reader.GetString(0),reader.GetString(1),reader.IsDBNull(2)?null:reader.GetString(2),reader.GetString(3),reader.GetString(4),reader.GetString(5),reader.GetString(6),reader.GetString(7)));
+        return new(list.ToArray());
+    }
+
+    public async Task SaveToolExecution(string id,string runId,string tool,string arguments,string result,string status,CancellationToken ct)
+    {
+        await using var db=await Open(ct);await Execute(db,"INSERT INTO ToolExecutions(Id,RunId,ToolName,ArgumentsJson,ResultJson,Status,CreatedAt) VALUES(@id,@r,@n,@a,@o,@s,@t)",null,ct,
+            ("id",id),("r",runId),("n",tool),("a",arguments),("o",result),("s",status),("t",Now));
+    }
+
+    public async Task<RetentionPolicy> Retention(string owner,CancellationToken ct)
+    {
+        await using var db=await Open(ct);await using var cmd=Command(db,"SELECT ConversationDays,FileDays,DeleteArchived FROM RetentionPolicies WHERE OwnerId=@o",null,("o",owner));await using var reader=await cmd.ExecuteReaderAsync(ct);
+        return await reader.ReadAsync(ct)?new(reader.GetInt32(0),reader.GetInt32(1),reader.GetInt32(2)!=0):new();
+    }
+
+    public async Task SaveRetention(string owner,RetentionPolicy policy,CancellationToken ct)
+    {
+        if(policy.ConversationDays is <0 or >36500||policy.FileDays is <0 or >36500)throw new WorkspaceException(400,"מדיניות השימור אינה תקינה");
+        await using var db=await Open(ct);await Execute(db,"INSERT INTO RetentionPolicies(OwnerId,ConversationDays,FileDays,DeleteArchived,UpdatedAt) VALUES(@o,@c,@f,@d,@t) ON CONFLICT(OwnerId) DO UPDATE SET ConversationDays=excluded.ConversationDays,FileDays=excluded.FileDays,DeleteArchived=excluded.DeleteArchived,UpdatedAt=excluded.UpdatedAt",null,ct,("o",owner),("c",policy.ConversationDays),("f",policy.FileDays),("d",policy.DeleteArchived?1:0),("t",Now));
+    }
+
+    public async Task ApplyRetention(CancellationToken ct)
+    {
+        await using var db=await Open(ct);var expired=new List<string>();
+        await using(var cmd=Command(db,"SELECT c.Id,c.UpdatedAt,p.ConversationDays FROM Conversations c JOIN RetentionPolicies p ON p.OwnerId=c.OwnerId WHERE p.DeleteArchived=1 AND p.ConversationDays>0 AND c.Archived=1",null))
+        await using(var reader=await cmd.ExecuteReaderAsync(ct)){while(await reader.ReadAsync(ct))if(DateTimeOffset.Parse(reader.GetString(1))<DateTimeOffset.UtcNow.AddDays(-reader.GetInt32(2)))expired.Add(reader.GetString(0));}
+        foreach(var id in expired)
+        {
+            await using var tx=await db.BeginTransactionAsync(ct);
+            await Execute(db,"DELETE FROM RunEvents WHERE RunId IN (SELECT Id FROM Runs WHERE ConversationId=@id)",tx,ct,("id",id));await Execute(db,"DELETE FROM RunMetrics WHERE RunId IN (SELECT Id FROM Runs WHERE ConversationId=@id)",tx,ct,("id",id));await Execute(db,"DELETE FROM RunFingerprints WHERE RunId IN (SELECT Id FROM Runs WHERE ConversationId=@id)",tx,ct,("id",id));await Execute(db,"DELETE FROM ToolExecutions WHERE RunId IN (SELECT Id FROM Runs WHERE ConversationId=@id)",tx,ct,("id",id));await Execute(db,"DELETE FROM Outbox WHERE RunId IN (SELECT Id FROM Runs WHERE ConversationId=@id)",tx,ct,("id",id));await Execute(db,"DELETE FROM Messages WHERE ConversationId=@id",tx,ct,("id",id));await Execute(db,"DELETE FROM Runs WHERE ConversationId=@id",tx,ct,("id",id));await Execute(db,"DELETE FROM Conversations WHERE Id=@id",tx,ct,("id",id));await tx.CommitAsync(ct);
+        }
+    }
+
+    public async Task<(int Queued,int Running)> QueueDepth(CancellationToken ct)
+    {
+#if NEXUS_NATIVE_AOT
+        await using var db=await Open(ct);await using var cmd=Command(db,"SELECT COALESCE(SUM(CASE WHEN Status='queued' THEN 1 ELSE 0 END),0),COALESCE(SUM(CASE WHEN Status='running' THEN 1 ELSE 0 END),0) FROM Runs",null);await using var reader=await cmd.ExecuteReaderAsync(ct);await reader.ReadAsync(ct);return(Convert.ToInt32(reader.GetValue(0)),Convert.ToInt32(reader.GetValue(1)));
+#else
+        await using var db=await Open(ct);ct.ThrowIfCancellationRequested();var row=await db.QuerySingleAsync<QueueDepthRow>("SELECT COALESCE(SUM(CASE WHEN Status='queued' THEN 1 ELSE 0 END),0) AS Queued,COALESCE(SUM(CASE WHEN Status='running' THEN 1 ELSE 0 END),0) AS Running FROM Runs");return(checked((int)row.Queued),checked((int)row.Running));
+#endif
+    }
+#if !NEXUS_NATIVE_AOT
+    private sealed record QueueDepthRow(long Queued,long Running);
+#endif
 }

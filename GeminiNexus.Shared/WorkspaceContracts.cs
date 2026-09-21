@@ -4,9 +4,13 @@ using System.Text.Json.Serialization;
 namespace GeminiNexus.Shared;
 
 public sealed record UserInfo(string Id, string Name, bool IsAdmin = false);
-public sealed record UserAccount(string Id, string Name, int Sessions);
+public sealed record UserAccount(string Id, string Name, int Sessions, string Email = "");
 public sealed record ChangePassword(string CurrentPassword, string NewPassword);
 public sealed record LoginRequest(string Name, string Password);
+public sealed record CreateUserRequest(string Name,string Password,string Email = "");
+public sealed record PasswordResetRequest(string Email);
+public sealed record PasswordResetConfirm(string Token,string NewPassword);
+public sealed record PasswordResetAccepted(string Status = "accepted");
 public sealed record ApiError(string Error, string TraceId = "");
 public sealed record Conversation(string Id, string Title, string Model, string UpdatedAt, bool Pinned, int MessageCount);
 public sealed record ConversationPage(Conversation[] Items, string? NextCursor);
@@ -46,11 +50,21 @@ public sealed record WorkspaceSettings
     public string Theme { get; init; } = "dark";
     public GenerationSettings Generation { get; init; } = new();
 }
+public sealed record PluginTool(string Name,string Description,string InputSchemaJson);
+public sealed record PluginManifest(string Id,string Version,string Name,string Runtime,string EntryPoint,
+    string[] Permissions,string[] Environments,PluginTool[] Tools);
 public sealed record PluginDefinition(string Id, string Name, string Kind, string Version, string Execution,
-    bool Enabled, string ConfigurationJson);
+    bool Enabled, string ConfigurationJson,PluginManifest? Manifest = null,string PackageReference = "",string PackageHash = "");
 public sealed record PluginList(PluginDefinition[] Items);
+public sealed record PluginPackageRequest(PluginManifest Manifest,string WasmBase64,bool Enabled = true,string Execution = "server");
 public sealed record PlaygroundRequest(string Method, string Path, string Body = "{}");
 public sealed record PlaygroundResponse(int Status, string ContentType, string Body);
+public sealed record ProviderCapability(string Id, string Name, string[] Methods, bool Asynchronous, bool Realtime = false);
+public sealed record ProviderCapabilityCatalog(ProviderCapability[] Items);
+public sealed record ProviderOperationRequest(string Capability, string Method, string Resource, string Body = "{}");
+public sealed record ProviderOperation(string Id, string Capability, string? ProviderName, string Status,
+    string RequestJson, string ResponseJson, string CreatedAt, string UpdatedAt);
+public sealed record ProviderOperationList(ProviderOperation[] Items);
 public sealed record TokenCountRequest(string Model, string ContentsJson);
 public sealed record TokenCountResult(int TotalTokens, bool Estimated, string? Error = null);
 public sealed record HealthStatus(string Status);
@@ -59,6 +73,10 @@ public sealed record TextDelta(string Text);
 public sealed record RunMetrics(string UsageJson, string? ModelVersion, string? FinishReason, long ElapsedMs, long? FirstTokenMs, long QueueMs);
 public sealed record RunCompletion(string Status, string? Error);
 public sealed record UploadLimit(int MaxAttachmentBytes, int MaxPromptChars);
+public sealed record RetentionPolicy(int ConversationDays = 0,int FileDays = 0,bool DeleteArchived = false);
+public sealed record ReadinessStatus(string Status,int SchemaVersion,string DatabaseProvider,int QueuedRuns,int RunningRuns);
+public sealed record SimilarityRequest(float[] Left,float[] Right,string Backend = "auto");
+public sealed record SimilarityResult(float Value,string Backend,bool OpenClAvailable,long KernelInvocations);
 
 [JsonSourceGenerationOptions(PropertyNamingPolicy = JsonKnownNamingPolicy.CamelCase,
     RespectNullableAnnotations = true, RespectRequiredConstructorParameters = true)]
@@ -66,6 +84,10 @@ public sealed record UploadLimit(int MaxAttachmentBytes, int MaxPromptChars);
 [JsonSerializable(typeof(UserAccount[]))]
 [JsonSerializable(typeof(ChangePassword))]
 [JsonSerializable(typeof(LoginRequest))]
+[JsonSerializable(typeof(CreateUserRequest))]
+[JsonSerializable(typeof(PasswordResetRequest))]
+[JsonSerializable(typeof(PasswordResetConfirm))]
+[JsonSerializable(typeof(PasswordResetAccepted))]
 [JsonSerializable(typeof(ApiError))]
 [JsonSerializable(typeof(Conversation))]
 [JsonSerializable(typeof(ConversationPage))]
@@ -84,8 +106,14 @@ public sealed record UploadLimit(int MaxAttachmentBytes, int MaxPromptChars);
 [JsonSerializable(typeof(WorkspaceSettings))]
 [JsonSerializable(typeof(PluginDefinition))]
 [JsonSerializable(typeof(PluginList))]
+[JsonSerializable(typeof(PluginManifest))]
+[JsonSerializable(typeof(PluginPackageRequest))]
 [JsonSerializable(typeof(PlaygroundRequest))]
 [JsonSerializable(typeof(PlaygroundResponse))]
+[JsonSerializable(typeof(ProviderCapabilityCatalog))]
+[JsonSerializable(typeof(ProviderOperationRequest))]
+[JsonSerializable(typeof(ProviderOperation))]
+[JsonSerializable(typeof(ProviderOperationList))]
 [JsonSerializable(typeof(TokenCountRequest))]
 [JsonSerializable(typeof(TokenCountResult))]
 [JsonSerializable(typeof(HealthStatus))]
@@ -93,5 +121,9 @@ public sealed record UploadLimit(int MaxAttachmentBytes, int MaxPromptChars);
 [JsonSerializable(typeof(RunCompletion))]
 [JsonSerializable(typeof(RunMetrics))]
 [JsonSerializable(typeof(UploadLimit))]
+[JsonSerializable(typeof(RetentionPolicy))]
+[JsonSerializable(typeof(ReadinessStatus))]
+[JsonSerializable(typeof(SimilarityRequest))]
+[JsonSerializable(typeof(SimilarityResult))]
 [JsonSerializable(typeof(JsonElement))]
 public partial class NexusJson : JsonSerializerContext;

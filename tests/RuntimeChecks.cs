@@ -33,7 +33,16 @@ var trace=TraceRedactor.Redact("{\"nested\":{\"authorization\":\"secret\"},\"tex
 Check(!trace.Contains("secret")&&!trace.Contains("fixture-key"),"Trace secret redaction");
 var parsed=GeminiProvider.Parse("{\"candidates\":[{\"index\":0,\"content\":{\"parts\":[{\"text\":\"private\",\"thought\":true},{\"text\":\"visible\",\"thoughtSignature\":\"signature\"}]},\"finishReason\":\"STOP\"},{\"index\":1,\"content\":{\"parts\":[{\"text\":\"alternative\"}]}}],\"unknown\":true}");
 Check(parsed.Text=="visible"&&parsed.PartsJson.Contains("signature")&&parsed.RawJson.Contains("alternative"),"All raw candidates retained; thought parts excluded from visible text");
-var services=new ServiceCollection().AddLogging().AddSingleton<IJSRuntime,NoJs>().AddSingleton(new HttpClient(new Fixture()){BaseAddress=new Uri("https://fixture.invalid/")}).AddSingleton<WorkspaceClient>().BuildServiceProvider();
+var left=new float[1024];var right=new float[1024];Array.Fill(left,2);Array.Fill(right,3);ComputeKernels.Dot(left,right,"simd");
+var allocated=GC.GetAllocatedBytesForCurrentThread();for(var i=0;i<1000;i++)ComputeKernels.Dot(left,right,"simd");
+Check(GC.GetAllocatedBytesForCurrentThread()==allocated&&ComputeKernels.Dot(left,right,"simd")==6144,"SIMD hot path is zero-allocation");
+using(var native=new NativeFloatBuffer(128)){native.Span.Fill(7);Check(native.Span[127]==7,"Aligned native-memory buffer");}
+var gpuContract=false;
+if(ComputeKernels.OpenClAvailable())gpuContract=Math.Abs(ComputeKernels.Dot(left,right,"gpu")-6144)<0.01f;
+else{try{ComputeKernels.Dot(left,right,"gpu");}catch(PlatformNotSupportedException){gpuContract=true;}}
+Check(gpuContract,"OpenCL GPU contract or explicit unavailable result");
+var services=new ServiceCollection().AddLogging().AddSingleton<IJSRuntime,NoJs>().AddSingleton<NavigationManager>(new FixtureNavigation())
+    .AddSingleton(new HttpClient(new Fixture()){BaseAddress=new Uri("https://fixture.invalid/")}).AddSingleton<WorkspaceClient>().BuildServiceProvider();
 await using(var renderer=new HtmlRenderer(services,services.GetRequiredService<ILoggerFactory>()))
 {
     await renderer.Dispatcher.InvokeAsync(async()=>
@@ -57,6 +66,11 @@ sealed class NoJs:IJSRuntime
 {
     public ValueTask<T> InvokeAsync<T>(string name,object?[]? args)=>ValueTask.FromResult(default(T)!);
     public ValueTask<T> InvokeAsync<T>(string name,CancellationToken ct,object?[]? args)=>ValueTask.FromResult(default(T)!);
+}
+sealed class FixtureNavigation:NavigationManager
+{
+    public FixtureNavigation()=>Initialize("https://fixture.invalid/","https://fixture.invalid/");
+    protected override void NavigateToCore(string uri,bool forceLoad)=>Uri=ToAbsoluteUri(uri).ToString();
 }
 sealed class Fixture:HttpMessageHandler
 {

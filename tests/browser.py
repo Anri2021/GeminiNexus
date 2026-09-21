@@ -2,7 +2,7 @@
 Install: python -m pip install -r tests/requirements.txt
          python -m playwright install --with-deps chromium
 """
-import json, pathlib, traceback
+import json, pathlib, sys, traceback
 from playwright.sync_api import sync_playwright, expect
 from integration import Contracts, ROOT
 
@@ -66,7 +66,9 @@ try:
             except Exception as diagnostic_error:
                 diagnostics.append('DIAGNOSTIC ERROR '+repr(diagnostic_error))
             diagnostics.append(traceback.format_exc())
-            (artifacts/'diagnostics.txt').write_text('\n'.join(diagnostics),encoding='utf-8')
+            diagnostic_text='\n'.join(diagnostics)
+            (artifacts/'diagnostics.txt').write_text(diagnostic_text,encoding='utf-8')
+            print(diagnostic_text,file=sys.stderr)
             raise
         finally:
             browser.close()

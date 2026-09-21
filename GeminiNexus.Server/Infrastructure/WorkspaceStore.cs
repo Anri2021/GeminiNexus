@@ -60,7 +60,9 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
         await using var db = await Open(ct);
         if (db is SqliteConnection) await Execute(db, "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;", null, ct);
         await DatabaseMigrations.Apply(db, options, ct);
-        if (options.AdminPassword.Length < 16) throw new InvalidOperationException("Auth:AdminPassword must contain at least 16 characters (or supply Auth:AdminPasswordFile).");
+        var minimumAdminPasswordLength = options.AllowInsecureLocal ? 6 : 16;
+        if (options.AdminPassword.Length < minimumAdminPasswordLength)
+            throw new InvalidOperationException($"Auth:AdminPassword must contain at least {minimumAdminPasswordLength} characters (or supply Auth:AdminPasswordFile).");
         // Revoke only when the configured administrator password actually changed.
         await using var tx=await db.BeginTransactionAsync(ct);
         await using var lookup=Command(db,"SELECT PasswordHash FROM NexusUsers WHERE Name=@name",tx,("name",options.AdminName));

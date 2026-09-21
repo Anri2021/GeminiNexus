@@ -2,38 +2,12 @@
 Install: python -m pip install -r tests/requirements.txt
          python -m playwright install --with-deps chromium
 """
-import functools, http.client, http.server, json, pathlib, threading, traceback
+import json, pathlib, sys, traceback
 from playwright.sync_api import sync_playwright, expect
 from integration import Contracts, ROOT
 
-class Proxy(http.server.SimpleHTTPRequestHandler):
-    protocol_version='HTTP/1.1'
-    def log_message(self,*args):pass
-    def forward(self):
-        connection=http.client.HTTPConnection('127.0.0.1',Contracts.api_port,timeout=30)
-        try:
-            body=self.rfile.read(int(self.headers.get('Content-Length',0))) or None
-            headers={k:v for k,v in self.headers.items() if k.lower() not in ('connection','transfer-encoding')}
-            connection.request(self.command,self.path,body,headers);response=connection.getresponse()
-            self.send_response(response.status)
-            for key,value in response.getheaders():
-                if key.lower() not in ('connection','transfer-encoding'):self.send_header(key,value)
-            self.send_header('Connection','close');self.end_headers();self.close_connection=True
-            while chunk:=response.read1(16384):self.wfile.write(chunk);self.wfile.flush()
-        except (BrokenPipeError,ConnectionResetError):pass
-        finally:connection.close()
-    def do_GET(self):
-        if self.path.startswith('/api/') or self.path.startswith('/health/'):self.forward()
-        else:super().do_GET()
-    def do_POST(self):self.forward()
-    def do_PUT(self):self.forward()
-    def do_PATCH(self):self.forward()
-    def do_DELETE(self):self.forward()
-
 Contracts.setUpClass()
-server=http.server.ThreadingHTTPServer(('127.0.0.1',0),functools.partial(Proxy,directory=str(ROOT/'artifacts/publish/client/wwwroot')))
-threading.Thread(target=server.serve_forever,daemon=True).start()
-url=f'http://127.0.0.1:{server.server_port}'
+url=Contracts.url
 artifacts=ROOT/'artifacts/browser';artifacts.mkdir(parents=True,exist_ok=True)
 try:
     with sync_playwright() as playwright:
@@ -92,9 +66,11 @@ try:
             except Exception as diagnostic_error:
                 diagnostics.append('DIAGNOSTIC ERROR '+repr(diagnostic_error))
             diagnostics.append(traceback.format_exc())
-            (artifacts/'diagnostics.txt').write_text('\n'.join(diagnostics),encoding='utf-8')
+            diagnostic_text='\n'.join(diagnostics)
+            (artifacts/'diagnostics.txt').write_text(diagnostic_text,encoding='utf-8')
+            print(diagnostic_text,file=sys.stderr)
             raise
         finally:
             browser.close()
 finally:
-    server.shutdown();Contracts.tearDownClass()
+    Contracts.tearDownClass()

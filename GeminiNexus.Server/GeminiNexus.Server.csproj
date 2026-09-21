@@ -18,11 +18,15 @@
     <PackageReference Include="Npgsql" Version="10.0.0" />
     <PackageReference Include="Polly" Version="8.8.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Components.WebAssembly.Server" Version="10.0.0" />
     <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="2.1.12" />
   </ItemGroup>
 
   <ItemGroup>
     <ProjectReference Include="..\GeminiNexus.Shared\GeminiNexus.Shared.csproj" />
+    <ProjectReference Include="..\GeminiNexus.Client.Wasm\GeminiNexus.Client.Wasm.csproj"
+                      ReferenceOutputAssembly="false"
+                      Condition="'$(PublishAot)' != 'true'" />
     <None Include="..\native\libnexus_native.so" Link="libnexus_native.so" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="Exists('..\native\libnexus_native.so')" />
   </ItemGroup>
 

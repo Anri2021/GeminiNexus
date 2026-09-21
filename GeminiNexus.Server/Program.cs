@@ -12,8 +12,14 @@ using GeminiNexus.Shared;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.StaticFiles;
 
-var builder=WebApplication.CreateSlimBuilder(args);
+var publishedWebRoot=Path.Combine(AppContext.BaseDirectory,"wwwroot");
+var builder=WebApplication.CreateSlimBuilder(new WebApplicationOptions
+{
+    Args=args,
+    WebRootPath=Directory.Exists(publishedWebRoot)?publishedWebRoot:null
+});
 var options=new ServerOptions(builder.Configuration);
 builder.Services.AddSingleton(options);
 builder.WebHost.ConfigureKestrel(k=>k.Limits.MaxRequestBodySize=24*1024*1024);
@@ -67,6 +73,12 @@ builder.Services.AddHsts(o=>{o.MaxAge=TimeSpan.FromDays(365);o.IncludeSubDomains
 var app=builder.Build();
 await app.Services.GetRequiredService<WorkspaceStore>().Initialize(CancellationToken.None);
 app.UseForwardedHeaders();
+#if !NEXUS_NATIVE_AOT
+app.UseBlazorFrameworkFiles();
+#endif
+var staticContentTypes=new FileExtensionContentTypeProvider();
+staticContentTypes.Mappings[".dat"]="application/octet-stream";
+app.UseStaticFiles(new StaticFileOptions{ContentTypeProvider=staticContentTypes});
 if(!options.AllowInsecureLocal)app.UseHsts();
 app.Use(async(context,next)=>
 {
@@ -100,4 +112,5 @@ LiveGateway.Map(app,options);
 app.MapGet("/health/live",()=>TypedResults.Json(new HealthStatus("ok"),NexusJson.Default.HealthStatus));
 app.MapGet("/health/ready",async(WorkspaceStore store,CancellationToken ct)=>{await using var db=await store.Open(ct);await using var command=db.CreateCommand();command.CommandText="SELECT COALESCE(MAX(Version),0) FROM SchemaMigrations";var schema=Convert.ToInt32(await command.ExecuteScalarAsync(ct));if(schema!=DatabaseMigrations.LatestVersion)throw new InvalidOperationException("Database schema is not current");var depth=await store.QueueDepth(ct);return TypedResults.Json(new ReadinessStatus("ready",schema,options.DatabaseProvider,depth.Queued,depth.Running),NexusJson.Default.ReadinessStatus);});
 app.UseFastEndpoints(c=>c.Serializer.Options.TypeInfoResolverChain.Insert(0,NexusJson.Default));
+app.MapFallbackToFile("index.html");
 app.Run();

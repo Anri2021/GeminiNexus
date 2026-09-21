@@ -12,5 +12,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'Server publish failed' }
     dotnet publish GeminiNexus.Client.Wasm -c Release -o "$Output/client" --disable-build-servers
     if ($LASTEXITCODE -ne 0) { throw 'Client publish failed' }
+    New-Item -ItemType Directory -Force -Path "$Output/server/wwwroot" | Out-Null
+    Copy-Item -Recurse -Force "$Output/client/wwwroot/*" "$Output/server/wwwroot/"
     Write-Host "Published server: $Output/server; static site: $Output/client/wwwroot"
 } finally { Pop-Location }

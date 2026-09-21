@@ -4,7 +4,7 @@ No real provider keys or paid API calls are used.
 """
 import argparse, sqlite3, base64, http.cookiejar, http.server, json, os, pathlib, socket, subprocess, tempfile, threading, time, unittest, urllib.request, urllib.error, urllib.parse, uuid
 ROOT=pathlib.Path(__file__).resolve().parents[1]
-parser=argparse.ArgumentParser();parser.add_argument('--dotnet',default='dotnet');parser.add_argument('--server-dll',default=str(ROOT/'GeminiNexus.Server/bin/Release/net11.0/GeminiNexus.Server.dll'));parser.add_argument('--server-exe');args,_=parser.parse_known_args()
+parser=argparse.ArgumentParser();parser.add_argument('--dotnet',default='dotnet');parser.add_argument('--server-dll',default=str(ROOT/'GeminiNexus.Server/bin/Release/net10.0/GeminiNexus.Server.dll'));parser.add_argument('--server-exe');args,_=parser.parse_known_args()
 def port():
     with socket.socket() as s:s.bind(('127.0.0.1',0));return s.getsockname()[1]
 class Gemini(http.server.BaseHTTPRequestHandler):

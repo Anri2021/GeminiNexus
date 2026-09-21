@@ -3,7 +3,7 @@ import concurrent.futures, http.cookiejar, http.server, json, os, pathlib, socke
 
 ROOT=pathlib.Path(__file__).resolve().parents[1]
 DOTNET=os.environ.get('DOTNET','dotnet')
-DLL=os.environ.get('SERVER_DLL',str(ROOT/'GeminiNexus.Server/bin/Release/net11.0/GeminiNexus.Server.dll'))
+DLL=os.environ.get('SERVER_DLL',str(ROOT/'GeminiNexus.Server/bin/Release/net10.0/GeminiNexus.Server.dll'))
 
 def port():
     with socket.socket() as value:value.bind(('127.0.0.1',0));return value.getsockname()[1]

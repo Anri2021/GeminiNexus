@@ -260,6 +260,12 @@ else
             if(active?.Id==selectedBefore)
             {
                 if(prompt==input)prompt="";attachments.Clear();await SelectChat(target);
+                if(active?.Id==target.Id&&currentRun?.Id!=run.Id)
+                {
+                    var submitted=await Api.Get($"runs/{run.Id}",NexusJson.Default.Run,selection?.Token??default);currentRun=submitted;
+                    if(IsActive(submitted))streamTask=WatchRun(run.Id,selection?.Token??default);
+                    else await StreamClosed(run.Id,selection?.Token??default);
+                }
                 await InvokeModule("bottom",true);
             }
             await RefreshRuns();await ReloadConversations();

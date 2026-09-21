@@ -22,6 +22,7 @@ var builder=WebApplication.CreateSlimBuilder(new WebApplicationOptions
 });
 var options=new ServerOptions(builder.Configuration);
 builder.Services.AddSingleton(options);
+builder.WebHost.UseKestrelHttpsConfiguration();
 builder.WebHost.ConfigureKestrel(k=>k.Limits.MaxRequestBodySize=24*1024*1024);
 builder.Services.ConfigureHttpJsonOptions(o=>o.SerializerOptions.TypeInfoResolverChain.Insert(0,NexusJson.Default));
 if(options.AllowInsecureLocal&&!builder.Environment.IsDevelopment()&&!builder.Environment.IsEnvironment("Testing"))

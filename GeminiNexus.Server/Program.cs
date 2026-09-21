@@ -12,6 +12,7 @@ using GeminiNexus.Shared;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.StaticFiles;
 
 var publishedWebRoot=Path.Combine(AppContext.BaseDirectory,"wwwroot");
 var builder=WebApplication.CreateSlimBuilder(new WebApplicationOptions
@@ -75,7 +76,9 @@ app.UseForwardedHeaders();
 #if !NEXUS_NATIVE_AOT
 app.UseBlazorFrameworkFiles();
 #endif
-app.UseStaticFiles();
+var staticContentTypes=new FileExtensionContentTypeProvider();
+staticContentTypes.Mappings[".dat"]="application/octet-stream";
+app.UseStaticFiles(new StaticFileOptions{ContentTypeProvider=staticContentTypes});
 if(!options.AllowInsecureLocal)app.UseHsts();
 app.Use(async(context,next)=>
 {

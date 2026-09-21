@@ -13,9 +13,12 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 
-var builder=WebApplication.CreateSlimBuilder(args);
 var publishedWebRoot=Path.Combine(AppContext.BaseDirectory,"wwwroot");
-if(Directory.Exists(publishedWebRoot))builder.WebHost.UseWebRoot(publishedWebRoot);
+var builder=WebApplication.CreateSlimBuilder(new WebApplicationOptions
+{
+    Args=args,
+    WebRootPath=Directory.Exists(publishedWebRoot)?publishedWebRoot:null
+});
 var options=new ServerOptions(builder.Configuration);
 builder.Services.AddSingleton(options);
 builder.WebHost.ConfigureKestrel(k=>k.Limits.MaxRequestBodySize=24*1024*1024);

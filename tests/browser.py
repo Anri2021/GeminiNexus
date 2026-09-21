@@ -62,6 +62,7 @@ try:
             prompt.fill('SLOW browser branch');page.locator('.send-button').click()
             expect(page.locator('.streaming')).to_be_visible(timeout=15000)
             page.locator('.new-chat').click()
+            expect(page.locator('.conversation-toolbar')).to_contain_text('שיחה חדשה',timeout=15000)
             expect(prompt).to_have_value('')
             prompt.fill('parallel browser run');page.locator('.send-button').click()
             expect(page.locator('.model-message').filter(has_text='המקבילי')).to_be_visible(timeout=30000)

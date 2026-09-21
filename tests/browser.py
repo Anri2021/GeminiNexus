@@ -2,7 +2,7 @@
 Install: python -m pip install -r tests/requirements.txt
          python -m playwright install --with-deps chromium
 """
-import functools, http.client, http.server, pathlib, threading, traceback
+import functools, http.client, http.server, json, pathlib, threading, traceback
 from playwright.sync_api import sync_playwright, expect
 from integration import Contracts, ROOT
 
@@ -79,6 +79,17 @@ try:
             page.screenshot(path=str(artifacts/'failure.png'),full_page=True)
             diagnostics.append('URL '+page.url)
             diagnostics.append('CONTENT '+page.locator('body').inner_text()[:4000])
+            try:
+                runs_response=context.request.get(url+'/api/runs')
+                diagnostics.append(f'RUNS HTTP {runs_response.status} '+runs_response.text())
+                conversations_response=context.request.get(url+'/api/conversations?take=100')
+                conversations_text=conversations_response.text()
+                diagnostics.append(f'CONVERSATIONS HTTP {conversations_response.status} '+conversations_text)
+                for conversation in json.loads(conversations_text).get('items',[]):
+                    messages_response=context.request.get(url+f"/api/conversations/{conversation['id']}/messages?take=100")
+                    diagnostics.append(f"MESSAGES {conversation['id']} HTTP {messages_response.status} "+messages_response.text())
+            except Exception as diagnostic_error:
+                diagnostics.append('DIAGNOSTIC ERROR '+repr(diagnostic_error))
             diagnostics.append(traceback.format_exc())
             (artifacts/'diagnostics.txt').write_text('\n'.join(diagnostics),encoding='utf-8')
             raise

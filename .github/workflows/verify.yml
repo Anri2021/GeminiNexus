@@ -1,0 +1,104 @@
+name: Verify workspace
+on:
+  push:
+    branches: [master, 'codex/**']
+  pull_request:
+    branches: [master]
+permissions:
+  contents: read
+jobs:
+  native-aot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: g++ -O3 -shared -fPIC native/nexus_native.cpp -o native/libnexus_native.so
+      - run: dotnet restore GeminiNexus.Server -r linux-x64 -p:PublishAot=true
+      - name: Publish warning-free NativeAOT server
+        run: dotnet publish GeminiNexus.Server -c Release -r linux-x64 -p:PublishAot=true -p:StripSymbols=true -p:TrimmerSingleWarn=false --no-restore -o artifacts/native-aot
+      - name: NativeAOT integration contracts
+        run: python3 tests/integration.py --server-exe "$GITHUB_WORKSPACE/artifacts/native-aot/GeminiNexus.Server"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nexus-native-aot
+          path: artifacts/native-aot
+          retention-days: 7
+  postgres-cluster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_DB: nexus
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: nexus_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d nexus"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet build GeminiNexus.Server -c Release
+      - name: PostgreSQL two-server acceptance
+        env:
+          POSTGRES_CONNECTION: Host=127.0.0.1;Port=5432;Database=nexus;Username=postgres;Password=nexus_test;Pooling=true
+        run: python3 tests/postgres_cluster.py
+  web-and-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Publish server and WebAssembly
+        run: |
+          g++ -O3 -shared -fPIC native/nexus_native.cpp -o native/libnexus_native.so
+          bash scripts/publish.sh
+      - name: Server integration contracts
+        run: python tests/integration.py --server-exe "$GITHUB_WORKSPACE/artifacts/publish/server/GeminiNexus.Server"
+      - name: Source and rendering checks
+        run: python tests/source_checks.py
+      - name: Concurrent load and bounded memory
+        run: python tests/load.py --server-exe "$GITHUB_WORKSPACE/artifacts/publish/server/GeminiNexus.Server"
+      - name: Install browser test runtime
+        run: |
+          python -m pip install -r tests/requirements.txt
+          python -m playwright install --with-deps chromium
+      - name: Published browser acceptance
+        run: python tests/browser.py --server-exe "$GITHUB_WORKSPACE/artifacts/publish/server/GeminiNexus.Server"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nexus-browser
+          path: artifacts/browser
+          retention-days: 7
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nexus-publish
+          path: artifacts/publish
+          retention-days: 7
+  maui-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - run: dotnet workload install maui-windows --skip-manifest-update
+      - run: dotnet build GeminiNexus.Client.Maui -c Release -f net11.0-windows10.0.19041.0 -p:NexusMauiTargets=net11.0-windows10.0.19041.0

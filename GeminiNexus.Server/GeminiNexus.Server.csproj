@@ -27,6 +27,9 @@
     <ProjectReference Include="..\GeminiNexus.Client.Wasm\GeminiNexus.Client.Wasm.csproj"
                       ReferenceOutputAssembly="false"
                       Condition="'$(PublishAot)' != 'true'" />
+    <ProjectReference Include="..\GeminiNexus.UI\GeminiNexus.UI.csproj"
+                      ReferenceOutputAssembly="false"
+                      Condition="'$(PublishAot)' != 'true'" />
     <None Include="..\native\libnexus_native.so" Link="libnexus_native.so" CopyToOutputDirectory="PreserveNewest" CopyToPublishDirectory="PreserveNewest" Condition="Exists('..\native\libnexus_native.so')" />
   </ItemGroup>
 

@@ -102,6 +102,8 @@ jobs:
           grep --fixed-strings '<div id="app">' "$RUNNER_TEMP/index.html"
           framework_asset=$(python -c "import re; print(re.search(r'src=\"([^\"]+_framework/[^\"]+|_framework/[^\"]+)\"', open('$RUNNER_TEMP/index.html', encoding='utf-8').read()).group(1))")
           curl --fail --silent --show-error "http://127.0.0.1:5000/$framework_asset" --output /dev/null
+          curl --fail --silent --show-error http://127.0.0.1:5000/_content/GeminiNexus.UI/workspace.css | grep --fixed-strings '.nexus-app'
+          curl --fail --silent --show-error http://127.0.0.1:5000/_content/GeminiNexus.UI/workspace.js | grep --fixed-strings 'export function'
       - name: Server integration contracts
         run: python tests/integration.py --server-exe "$GITHUB_WORKSPACE/artifacts/publish/server/GeminiNexus.Server"
       - name: Source and rendering checks

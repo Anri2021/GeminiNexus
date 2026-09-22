@@ -14,6 +14,7 @@ using Polly.Retry;
 namespace GeminiNexus.Server.Providers;
 
 public sealed record ProviderChunk(string RawJson, string Text, string PartsJson, string? FinishReason);
+public sealed record ProviderFile(string Name,string Uri,string MimeType,long SizeBytes,string State,string? ExpirationTime);
 public interface IChatProvider
 {
     Task<string> Prepare(StoredRunRequest request,CancellationToken ct);
@@ -213,14 +214,37 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
         if(displayName.Length is <1 or >255||mimeType.Length is <1 or >120)throw new WorkspaceException(400,"מטא־נתוני הקובץ אינם תקינים");
         byte[] bytes;try{bytes=Convert.FromBase64String(encoded);}catch(FormatException){throw new WorkspaceException(400,"תוכן הקובץ אינו Base64 תקין");}
         if(bytes.Length is <1||bytes.Length>options.MaxAttachmentBytes)throw new WorkspaceException(413,"הקובץ חורג ממגבלת ההעלאה");
+        await using var stream=new MemoryStream(bytes,false);var file=await UploadFile(displayName,mimeType,stream,bytes.Length,ct);
+        return new(200,"application/json",new JsonObject{{"name",file.Name},{"uri",file.Uri},{"mimeType",file.MimeType},{"sizeBytes",file.SizeBytes},{"state",file.State},{"expirationTime",file.ExpirationTime}}.ToJsonString());
+    }
+    public async Task<ProviderFile> UploadFile(string displayName,string mimeType,Stream content,long length,CancellationToken ct)
+    {
+        if(displayName.Length is <1 or >255||mimeType.Length is <1 or >120||length is <1)throw new WorkspaceException(400,"מטא־נתוני הקובץ אינם תקינים");
+        if(length>options.MaxAttachmentBytes||(mimeType.Equals("application/pdf",StringComparison.OrdinalIgnoreCase)&&length>options.MaxPdfBytes))throw new WorkspaceException(413,"הקובץ חורג ממגבלת ההעלאה");
         var uploadEndpoint=new Uri(new Uri(options.ApiBaseUrl),"../upload/v1beta/files");
         var metadata=new JsonObject{{"file",new JsonObject{{"display_name",displayName}}}}.ToJsonString();
-        using var start=Request(HttpMethod.Post,uploadEndpoint.ToString(),metadata);start.Headers.Add("X-Goog-Upload-Protocol","resumable");start.Headers.Add("X-Goog-Upload-Command","start");start.Headers.Add("X-Goog-Upload-Header-Content-Length",bytes.Length.ToString(System.Globalization.CultureInfo.InvariantCulture));start.Headers.Add("X-Goog-Upload-Header-Content-Type",mimeType);
+        using var start=Request(HttpMethod.Post,uploadEndpoint.ToString(),metadata);start.Headers.Add("X-Goog-Upload-Protocol","resumable");start.Headers.Add("X-Goog-Upload-Command","start");start.Headers.Add("X-Goog-Upload-Header-Content-Length",length.ToString(System.Globalization.CultureInfo.InvariantCulture));start.Headers.Add("X-Goog-Upload-Header-Content-Type",mimeType);
         using var startResponse=await factory.CreateClient("Gemini").SendAsync(start,HttpCompletionOption.ResponseHeadersRead,ct);
         if(!startResponse.IsSuccessStatusCode)throw new WorkspaceException((int)startResponse.StatusCode,"פתיחת העלאת הקובץ נכשלה: "+SafeError(await ReadBounded(startResponse.Content,options.MaxEventBytes,ct)));
         if(!startResponse.Headers.TryGetValues("X-Goog-Upload-URL",out var locations)||locations.FirstOrDefault() is not {Length:>0} location)throw new WorkspaceException(502,"הספק לא החזיר כתובת העלאה");
-        using var upload=new HttpRequestMessage(HttpMethod.Post,location){Content=new ByteArrayContent(bytes)};upload.Headers.Add("X-Goog-Upload-Offset","0");upload.Headers.Add("X-Goog-Upload-Command","upload, finalize");upload.Content.Headers.ContentType=new MediaTypeHeaderValue(mimeType);
+        using var upload=new HttpRequestMessage(HttpMethod.Post,location){Content=new StreamContent(content)};upload.Headers.Add("X-Goog-Upload-Offset","0");upload.Headers.Add("X-Goog-Upload-Command","upload, finalize");upload.Content.Headers.ContentType=new MediaTypeHeaderValue(mimeType);upload.Content.Headers.ContentLength=length;
         using var response=await factory.CreateClient("Gemini").SendAsync(upload,HttpCompletionOption.ResponseHeadersRead,ct);var responseBody=await ReadBounded(response.Content,options.MaxEventBytes,ct);
-        return new((int)response.StatusCode,response.Content.Headers.ContentType?.ToString()??"application/json",SafeError(responseBody));
+        if(!response.IsSuccessStatusCode)throw new WorkspaceException((int)response.StatusCode,"העלאת הקובץ נכשלה: "+SafeError(responseBody));
+        var file=ParseFile(responseBody);var deadline=DateTimeOffset.UtcNow.AddMinutes(2);
+        while(file.State.Equals("processing",StringComparison.OrdinalIgnoreCase)&&DateTimeOffset.UtcNow<deadline)
+        {
+            await Task.Delay(1000,ct);using var statusRequest=Request(HttpMethod.Get,file.Name);using var statusResponse=await factory.CreateClient("Gemini").SendAsync(statusRequest,HttpCompletionOption.ResponseHeadersRead,ct);var statusBody=await ReadBounded(statusResponse.Content,options.MaxEventBytes,ct);
+            if(!statusResponse.IsSuccessStatusCode)throw new WorkspaceException((int)statusResponse.StatusCode,"בדיקת מצב הקובץ נכשלה: "+SafeError(statusBody));file=ParseFile(statusBody);
+        }
+        if(!file.State.Equals("active",StringComparison.OrdinalIgnoreCase))throw new WorkspaceException(502,"הקובץ לא הפך לזמין לעיבוד בזמן שהוקצב");return file;
+    }
+    public async Task DeleteFile(string name,CancellationToken ct)
+    {using var request=Request(HttpMethod.Delete,name);using var response=await factory.CreateClient("Gemini").SendAsync(request,ct);if(!response.IsSuccessStatusCode&&response.StatusCode!=HttpStatusCode.NotFound)throw new WorkspaceException((int)response.StatusCode,"מחיקת הקובץ מהספק נכשלה");}
+    private static ProviderFile ParseFile(string body)
+    {
+        using var document=JsonDocument.Parse(body);var root=document.RootElement;if(root.TryGetProperty("file",out var nested))root=nested;
+        var name=root.GetProperty("name").GetString()??throw new WorkspaceException(502,"תגובת הקובץ חסרה מזהה");var uri=root.GetProperty("uri").GetString()??throw new WorkspaceException(502,"תגובת הקובץ חסרה כתובת");
+        var mime=root.TryGetProperty("mimeType",out var m)?m.GetString()??"application/octet-stream":"application/octet-stream";var size=root.TryGetProperty("sizeBytes",out var s)&&long.TryParse(s.ToString(),out var parsed)?parsed:0;
+        var state=root.TryGetProperty("state",out var st)?st.GetString()??"active":"active";var expiry=root.TryGetProperty("expirationTime",out var e)?e.GetString():null;return new(name,uri,mime,size,state,expiry);
     }
 }

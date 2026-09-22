@@ -71,11 +71,12 @@ else
             </div>
         </section>
         <div class="composer-zone"><div class="composer">
-            @if(attachments.Count>0){<div class="attachment-list">@foreach(var file in attachments){<span>@file.Name<button @onclick="()=>attachments.Remove(file)">×</button></span>}</div>}
+            @if(attachments.Count>0){<div class="attachment-list">@foreach(var file in attachments){<span title="@($"{file.MimeType} · {FormatBytes(file.SizeBytes)}")">@file.Name <small>@FormatBytes(file.SizeBytes)</small><button @onclick="()=>attachments.Remove(file)">×</button></span>}</div>}
+            @if(uploadingFiles){<div class="muted" role="status">@uploadStatus</div>}
             <textarea @bind="prompt" @bind:event="oninput" @onkeydown="KeyDown" placeholder="אפשר לשאול הכול…" aria-label="הודעה חדשה" rows="2"></textarea>
             <div class="composer-bottom"><div class="composer-tools"><label class="attach-button" title="הוספת קובץ">＋<InputFile OnChange="Attach" multiple /></label><select @bind="model" aria-label="בחירת מודל">@foreach(var m in models){<option value="@m.Id">@m.Name</option>}@if(!models.Any(m=>m.Id==model)){<option value="@model">@model</option>}</select><button class="icon" @onclick='()=>panel="settings"' title="הגדרות יצירה">☷</button></div>
             @if(currentRun is not null&&IsActive(currentRun)){<button class="send-button stop" @onclick="Cancel" title="עצירת העיבוד">■</button>}
-            else{<button class="send-button" @onclick="Send" disabled="@(busy||string.IsNullOrWhiteSpace(prompt))" title="שליחה">↑</button>}</div>
+            else{<button class="send-button" @onclick="Send" disabled="@(busy||uploadingFiles||string.IsNullOrWhiteSpace(prompt))" title="שליחה">↑</button>}</div>
         </div><div class="composer-caption">תוכן שנוצר ב־AI עשוי להיות שגוי. כדאי לבדוק פרטים חשובים. <span>@(messages.Count) הודעות בבאפר</span></div></div>
     </main>
     @if(panel is not null)
@@ -178,12 +179,12 @@ else
     private UserAccount[] accounts=[];
     private RunMetrics? debugMetrics;
     private string accountName="",accountEmail="",accountPassword="",oldPassword="",resetEmail="",resetToken="",resetNewPassword="";
-    private UserInfo? user;private bool loading=true,busy,sidebarOpen,hasMore,hasNewer,loadingHistory,loadingConversations,resetMode;private string? error,panel,conversationCursor,resetNotice;
+    private UserInfo? user;private bool loading=true,busy,uploadingFiles,sidebarOpen,hasMore,hasNewer,loadingHistory,loadingConversations,resetMode;private string? error,panel,conversationCursor,resetNotice;
     private string loginName="admin",password="",search="",prompt="",model="gemini-3.8-flash",streaming="";
     private List<Conversation> conversations=[];private List<Message> messages=[];private Run[] runs=[];private ModelInfo[] models=[];private Conversation? active;private Run? currentRun;
-    private PluginList plugins=new([]);private ProviderCapabilityCatalog providerCapabilities=new([]);private ProviderOperationList providerOperations=new([]);private List<Attachment> attachments=[];private WorkspaceSettings settings=new();private UploadLimit limits=new(8388608,100000);
-    private int conversationPageSize=30,prefetchPages=1,pageSize=30,bufferTurns=60,bufferMb=4,overscan=4,renderMs=80,contextTurns=20,tokenBudget=24000,outputTokens=8192;private double temperature=1;
-    private string systemInstruction="",advancedJson="{}",pluginName="",pluginKind="prefix",pluginExecution="server",pluginText="",pluginFind="",labMethod="GET",labPath="models",labBody="{}",labResult="",providerCapability="interactions",providerMethod="POST",providerResource="interactions",providerBody="{}";
+    private PluginList plugins=new([]);private ProviderCapabilityCatalog providerCapabilities=new([]);private ProviderOperationList providerOperations=new([]);private List<Attachment> attachments=[];private WorkspaceSettings settings=new();private UploadLimit limits=new(104857600,100000,10,52428800);
+    private int conversationPageSize=30,prefetchPages=1,pageSize=30,bufferTurns=60,bufferMb=4,overscan=4,renderMs=80,contextTurns=20,tokenBudget=1000000,outputTokens=8192;private double temperature=1;
+    private string systemInstruction="",advancedJson="{}",pluginName="",pluginKind="prefix",pluginExecution="server",pluginText="",pluginFind="",labMethod="GET",labPath="models",labBody="{}",labResult="",providerCapability="interactions",providerMethod="POST",providerResource="interactions",providerBody="{}",uploadStatus="";
     private string inspectedRun="",debugTab="summary";private List<RunEvent> debugEvents=[];private bool debugMore;
     private Virtualize<Message>? messageVirtualizer;private IJSObjectReference? module;private DotNetObjectReference<Workspace>? reference;private readonly CancellationTokenSource lifetime=new();private CancellationTokenSource? selection,searchCancel;private Task? polling,streamTask;private bool setupNeeded;
     private string PanelTitle=>panel switch{"settings"=>"העדפות ובאפרינג","plugins"=>"התוספים שלך","provider"=>"יכולות Gemini","lab"=>"מעבדת API","account"=>"חשבון ואבטחה",_=>"בדיקת ריצה"};
@@ -194,7 +195,7 @@ else
     private async Task InitializeWorkspace()
     {
         settings=await Api.Get("settings",NexusJson.Default.WorkspaceSettings,lifetime.Token);SetFields();plugins=await Api.Get("plugins",NexusJson.Default.PluginList,lifetime.Token);limits=await Api.Get("limits",NexusJson.Default.UploadLimit,lifetime.Token);
-        try{models=(await Api.Get("models",NexusJson.Default.ModelCatalog,lifetime.Token)).Items.Where(m=>m.Methods.Contains("generateContent")).ToArray();if(models.Length>0&&!models.Any(m=>m.Id==model))model=models[0].Id;}catch(Exception ex){error=ex.Message;}
+        try{models=(await Api.Get("models",NexusJson.Default.ModelCatalog,lifetime.Token)).Items.Where(m=>m.Methods.Contains("generateContent")).ToArray();if(models.Length>0&&!models.Any(m=>m.Id==model))model=models[0].Id;if(tokenBudget==24000&&models.FirstOrDefault(m=>m.Id==model) is {InputTokenLimit:>24000} selected)tokenBudget=Math.Min(2000000,selected.InputTokenLimit);}catch(Exception ex){error=ex.Message;}
         await ReloadConversations();await RefreshRuns();setupNeeded=true;polling??=Poll();
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -273,7 +274,24 @@ else
         finally{busy=false;}
     });
     private async Task KeyDown(KeyboardEventArgs e){if(e.Key=="Enter"&&!e.ShiftKey&&!e.IsComposing)await Send();}
-    private async Task Attach(InputFileChangeEventArgs e)=>await Guard(async()=>{foreach(var file in e.GetMultipleFiles(8)){if(attachments.Count>=8)throw new InvalidOperationException("אפשר לצרף עד שמונה קבצים");await using var stream=file.OpenReadStream(limits.MaxAttachmentBytes);using var memory=new MemoryStream();await stream.CopyToAsync(memory);attachments.Add(new(file.Name,string.IsNullOrWhiteSpace(file.ContentType)?"application/octet-stream":file.ContentType,Convert.ToBase64String(memory.ToArray())));}});
+    private async Task Attach(InputFileChangeEventArgs e)=>await Guard(async()=>
+    {
+        var selected=e.GetMultipleFiles(limits.MaxAttachments);if(attachments.Count+selected.Count>limits.MaxAttachments)throw new InvalidOperationException($"אפשר לצרף עד {limits.MaxAttachments} קבצים");
+        uploadingFiles=true;
+        try
+        {
+            for(var i=0;i<selected.Count;i++)
+            {
+                var file=selected[i];var mime=string.IsNullOrWhiteSpace(file.ContentType)?"application/octet-stream":file.ContentType;
+                var isPdf=mime.Equals("application/pdf",StringComparison.OrdinalIgnoreCase)||Path.GetExtension(file.Name).Equals(".pdf",StringComparison.OrdinalIgnoreCase);var max=isPdf?limits.MaxPdfBytes:limits.MaxAttachmentBytes;
+                if(file.Size>max)throw new InvalidOperationException($"הקובץ {file.Name} גדול מהמגבלה ({FormatBytes(max)})");
+                uploadStatus=$"מעלה {i+1} מתוך {selected.Count}: {file.Name}";await InvokeAsync(StateHasChanged);
+                await using var stream=file.OpenReadStream(max,lifetime.Token);attachments.Add(await Api.Upload(file.Name,mime,stream,lifetime.Token));
+            }
+        }
+        finally{uploadingFiles=false;uploadStatus="";}
+    });
+    private static string FormatBytes(long bytes)=>bytes switch{>=1073741824=>$"{bytes/1073741824d:0.##} GB",>=1048576=>$"{bytes/1048576d:0.##} MB",>=1024=>$"{bytes/1024d:0.##} KB",_=>$"{bytes} B"};
     private async Task Cancel()=>await Guard(async()=>{if(currentRun is not null)await Api.Action(HttpMethod.Post,$"runs/{currentRun.Id}/cancel");});
     private async Task WatchRun(string runId,CancellationToken ct)
     {

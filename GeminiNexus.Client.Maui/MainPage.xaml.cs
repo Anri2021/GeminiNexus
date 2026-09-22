@@ -8,7 +8,7 @@ public partial class MainPage : ContentPage
     public MainPage()
     {
         InitializeComponent();
-        ServerAddress.Text=Preferences.Default.Get("NexusServerUrl","");
+        ServerAddress.Text=Preferences.Default.Get("NexusServerUrl","https://localhost:5000/");
     }
     private void Connect(object? sender,EventArgs e)
     {

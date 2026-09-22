@@ -11,7 +11,9 @@ public sealed class ServerOptions(IConfiguration config)
     public int RunTimeoutSeconds { get; } = Read(config, "Processing:RunTimeoutSeconds", 600, 10, 7200);
     public int MaxPromptChars { get; } = Read(config, "Limits:MaxPromptChars", 100000, 1, 1000000);
     public int MaxResponseChars { get; } = Read(config, "Limits:MaxResponseChars", 1000000, 1000, 10000000);
-    public int MaxAttachmentBytes { get; } = Read(config, "Limits:MaxAttachmentBytes", 8388608, 1024, 16777216);
+    public int MaxAttachmentBytes { get; } = Read(config, "Limits:MaxAttachmentBytes", 104857600, 1024, 1073741824);
+    public int MaxPdfBytes { get; } = Read(config, "Limits:MaxPdfBytes", 52428800, 1024, 104857600);
+    public int MaxAttachments { get; } = Read(config, "Limits:MaxAttachments", 10, 1, 10);
     public int MaxTraceBytes { get; } = Read(config, "Limits:MaxTraceBytes", 16777216, 4096, 134217728);
     public int TraceRetentionDays { get; } = Read(config, "Limits:TraceRetentionDays", 14, 1, 3650);
     public int MaxHistoryBytes { get; } = Read(config,"Limits:MaxHistoryBytes",33554432,1048576,134217728);
@@ -22,7 +24,7 @@ public sealed class ServerOptions(IConfiguration config)
     public string LiveApiUrl { get; } = config["Gemini:LiveUrl"] ?? "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
     public string AdminName { get; } = config["Auth:AdminName"] ?? "admin";
     public string AdminPassword { get; } = ReadSecret(config, "Auth:AdminPassword", "Auth:AdminPasswordFile");
-    public bool AllowInsecureLocal { get; } = config["Auth:AllowInsecureLocal"] == "true";
+    public bool AllowInsecureLocal { get; } = bool.TryParse(config["Auth:AllowInsecureLocal"],out var allowInsecureLocal)&&allowInsecureLocal;
     public string PluginDirectory { get; } = config["Plugins:Directory"] ?? "data/plugins";
     public string WasmtimePath { get; } = config["Plugins:WasmtimePath"] ?? "wasmtime";
     public int PluginTimeoutSeconds { get; } = Read(config,"Plugins:TimeoutSeconds",10,1,60);

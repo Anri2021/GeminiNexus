@@ -77,8 +77,20 @@ public sealed class SubmitRunEndpoint(WorkspaceStore store,RunCoordinator coordi
         if(s.ContextMaxTurns is <0 or >500||s.ContextTokenBudget is <1 or >2000000||s.MaxOutputTokens is <1 or >1000000||!double.IsFinite(s.Temperature)||s.Temperature is <0 or >2||s.AdvancedJson.Length>131072||s.SystemInstruction.Length>100000)throw new WorkspaceException(400,"הגדרות יצירה אינן תקינות");
         using var advanced=JsonDocument.Parse(s.AdvancedJson);if(advanced.RootElement.ValueKind!=JsonValueKind.Object)throw new WorkspaceException(400,"הגדרות מתקדמות חייבות להיות אובייקט JSON");
         if(advanced.RootElement.TryGetProperty("contents",out _))throw new WorkspaceException(400,"היסטוריית השיחה נקבעת על ידי השרת");
-        long bytes=0;foreach(var attachment in r.Attachments??[]){if(attachment.Name.Length>255||attachment.MimeType.Length>120||attachment.Data.Length>options.MaxAttachmentBytes*2)throw new WorkspaceException(400,"קובץ אינו תקין");try{bytes+=Convert.FromBase64String(attachment.Data).Length;}catch(FormatException){throw new WorkspaceException(400,"קובץ אינו תקין");}}
-        if(bytes>options.MaxAttachmentBytes||(r.Attachments?.Length??0)>8)throw new WorkspaceException(413,"הקבצים חורגים מהמגבלה");
+        long bytes=0;var attachments=r.Attachments??[];
+        if(attachments.Length>options.MaxAttachments)throw new WorkspaceException(413,$"אפשר לצרף עד {options.MaxAttachments} קבצים");
+        foreach(var attachment in attachments)
+        {
+            if(attachment.Name.Length is <1 or >255||attachment.MimeType.Length is <1 or >120||attachment.FileId.Length>128)throw new WorkspaceException(400,"קובץ אינו תקין");
+            if(attachment.FileId.Length>0)
+            {
+                if(attachment.Data.Length>0)throw new WorkspaceException(400,"הפניית קובץ אינה יכולה לכלול גם נתונים מוטמעים");
+                continue;
+            }
+            if(attachment.Data.Length>options.MaxAttachmentBytes*2)throw new WorkspaceException(413,"הקובץ חורג ממגבלת ההעלאה");
+            try{bytes+=Convert.FromBase64String(attachment.Data).Length;}catch(FormatException){throw new WorkspaceException(400,"קובץ אינו תקין");}
+        }
+        if(bytes>options.MaxAttachmentBytes)throw new WorkspaceException(413,"הקבצים המוטמעים חורגים מהמגבלה");
         var plugins=await store.Plugins(Owner,ct);var changed=PluginEngine.Apply(r.Prompt,s.SystemInstruction,plugins.Items,"server");r=r with{Prompt=changed.Prompt,Settings=s with{SystemInstruction=changed.System,AdvancedJson=PluginEngine.AddToolDeclarations(s.AdvancedJson,plugins.Items,"server")}};
         if(r.Prompt.Length>options.MaxPromptChars||r.Settings.SystemInstruction.Length>100000)throw new WorkspaceException(400,"פלט התוספים גדול ממגבלת הפרומפט");
         var run=await store.Enqueue(Owner,r,ct);coordinator.Signal();HttpContext.Response.StatusCode=202;await Json(run,NexusJson.Default.Run,ct);
@@ -139,8 +151,28 @@ public sealed class ExplorerEndpoint(IProviderExplorer provider,ServerOptions op
 }
 public sealed class CountEndpoint(ITokenCounter provider):NexusEndpoint
 {public override void Configure()=>Post("/api/chat/count-tokens");public override async Task HandleAsync(CancellationToken ct){var r=await Body(NexusJson.Default.TokenCountRequest,ct);await Json(new TokenCountResult(await provider.Count(r.Model,r.ContentsJson,ct),false),NexusJson.Default.TokenCountResult,ct);}}
+public sealed class UploadFileEndpoint(GeminiProvider provider,WorkspaceStore store,ServerOptions options):NexusEndpoint
+{
+    public override void Configure()=>Post("/api/files");
+    public override async Task HandleAsync(CancellationToken ct)
+    {
+        if(!HttpContext.Request.HasFormContentType)throw new WorkspaceException(415,"נדרשת העלאה מסוג multipart/form-data");
+        var form=await HttpContext.Request.ReadFormAsync(ct);if(form.Files.Count!=1)throw new WorkspaceException(400,"יש להעלות קובץ אחד בכל בקשה");
+        var file=form.Files[0];var name=Path.GetFileName(file.FileName.Replace('\\','/'));var mime=string.IsNullOrWhiteSpace(file.ContentType)?"application/octet-stream":file.ContentType;
+        var isPdf=mime.Equals("application/pdf",StringComparison.OrdinalIgnoreCase)||Path.GetExtension(name).Equals(".pdf",StringComparison.OrdinalIgnoreCase);var max=isPdf?options.MaxPdfBytes:options.MaxAttachmentBytes;
+        if(name.Length is <1 or >255||mime.Length>120||file.Length is <1||file.Length>max)throw new WorkspaceException(413,"הקובץ חורג ממגבלת ההעלאה");
+        await using var stream=file.OpenReadStream();var remote=await provider.UploadFile(name,mime,stream,file.Length,ct);
+        var attachment=new Attachment(name,mime,FileId:Guid.NewGuid().ToString("N"),FileUri:remote.Uri,SizeBytes:file.Length,State:remote.State.ToLowerInvariant(),ExpiresAt:remote.ExpirationTime);
+        try{await store.SaveFile(Owner,attachment,remote.Name,remote.Uri,ct);}catch{try{await provider.DeleteFile(remote.Name,CancellationToken.None);}catch{}throw;}
+        HttpContext.Response.StatusCode=201;await Json(attachment,NexusJson.Default.Attachment,ct);
+    }
+}
+public sealed class FilesEndpoint(WorkspaceStore store):NexusEndpoint
+{public override void Configure()=>Get("/api/files");public override async Task HandleAsync(CancellationToken ct)=>await Json(await store.Files(Owner,ct),NexusJson.Default.AttachmentArray,ct);}
+public sealed class DeleteFileEndpoint(WorkspaceStore store,GeminiProvider provider):NexusEndpoint
+{public override void Configure()=>Delete("/api/files/{id}");public override async Task HandleAsync(CancellationToken ct){var providerName=await store.FileProviderName(Owner,Id,ct);await provider.DeleteFile(providerName,ct);await store.DeleteFile(Owner,Id,ct);HttpContext.Response.StatusCode=204;}}
 public sealed class LimitsEndpoint(ServerOptions options):NexusEndpoint
-{public override void Configure()=>Get("/api/limits");public override Task HandleAsync(CancellationToken ct)=>Json(new UploadLimit(options.MaxAttachmentBytes,options.MaxPromptChars),NexusJson.Default.UploadLimit,ct);}
+{public override void Configure()=>Get("/api/limits");public override Task HandleAsync(CancellationToken ct)=>Json(new UploadLimit(options.MaxAttachmentBytes,options.MaxPromptChars,options.MaxAttachments,options.MaxPdfBytes),NexusJson.Default.UploadLimit,ct);}
 public sealed class SimilarityEndpoint:NexusEndpoint
 {public override void Configure()=>Post("/api/local/similarity");public override async Task HandleAsync(CancellationToken ct){var request=await Body(NexusJson.Default.SimilarityRequest,ct);if(request.Left.Length>2_000_000||request.Backend is not ("auto" or "simd" or "native" or "gpu"))throw new WorkspaceException(400,"בקשת חישוב אינה תקינה");var value=ComputeKernels.Dot(request.Left,request.Right,request.Backend);await Json(new SimilarityResult(value,request.Backend,ComputeKernels.OpenClAvailable(),ComputeKernels.Invocations),NexusJson.Default.SimilarityResult,ct);}}
 

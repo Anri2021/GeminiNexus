@@ -12,18 +12,31 @@ using GeminiNexus.Shared;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.StaticFiles;
 
 var publishedWebRoot=Path.Combine(AppContext.BaseDirectory,"wwwroot");
 var builder=WebApplication.CreateSlimBuilder(new WebApplicationOptions
 {
     Args=args,
-    WebRootPath=Directory.Exists(publishedWebRoot)?publishedWebRoot:null
+    WebRootPath=Directory.Exists(publishedWebRoot)?publishedWebRoot:"wwwroot"
 });
+var configuredSettings=Environment.GetEnvironmentVariable("NEXUS_CONFIG");
+var settingsCandidates=new[]
+{
+    configuredSettings,
+    Path.Combine(builder.Environment.ContentRootPath,"nexus.settings.json"),
+    Path.GetFullPath(Path.Combine(builder.Environment.ContentRootPath,"..","nexus.settings.json"))
+};
+var settingsPath=settingsCandidates.FirstOrDefault(path=>!string.IsNullOrWhiteSpace(path)&&File.Exists(path));
+if(settingsPath is not null)builder.Configuration.AddJsonStream(new MemoryStream(File.ReadAllBytes(settingsPath)));
+// The local file is convenient, while environment variables and CLI switches retain highest precedence.
+builder.Configuration.AddEnvironmentVariables();builder.Configuration.AddCommandLine(args);
 var options=new ServerOptions(builder.Configuration);
 builder.Services.AddSingleton(options);
 builder.WebHost.UseKestrelHttpsConfiguration();
-builder.WebHost.ConfigureKestrel(k=>k.Limits.MaxRequestBodySize=24*1024*1024);
+builder.WebHost.ConfigureKestrel(k=>k.Limits.MaxRequestBodySize=(long)options.MaxAttachmentBytes+2*1024*1024);
+builder.Services.Configure<FormOptions>(o=>{o.MultipartBodyLengthLimit=(long)options.MaxAttachmentBytes+1024*1024;o.MemoryBufferThreshold=1024*1024;});
 builder.Services.ConfigureHttpJsonOptions(o=>o.SerializerOptions.TypeInfoResolverChain.Insert(0,NexusJson.Default));
 if(options.AllowInsecureLocal&&!builder.Environment.IsDevelopment()&&!builder.Environment.IsEnvironment("Testing"))
     throw new InvalidOperationException("Auth:AllowInsecureLocal is limited to Development and Testing.");
@@ -113,5 +126,7 @@ LiveGateway.Map(app,options);
 app.MapGet("/health/live",()=>TypedResults.Json(new HealthStatus("ok"),NexusJson.Default.HealthStatus));
 app.MapGet("/health/ready",async(WorkspaceStore store,CancellationToken ct)=>{await using var db=await store.Open(ct);await using var command=db.CreateCommand();command.CommandText="SELECT COALESCE(MAX(Version),0) FROM SchemaMigrations";var schema=Convert.ToInt32(await command.ExecuteScalarAsync(ct));if(schema!=DatabaseMigrations.LatestVersion)throw new InvalidOperationException("Database schema is not current");var depth=await store.QueueDepth(ct);return TypedResults.Json(new ReadinessStatus("ready",schema,options.DatabaseProvider,depth.Queued,depth.Running),NexusJson.Default.ReadinessStatus);});
 app.UseFastEndpoints(c=>c.Serializer.Options.TypeInfoResolverChain.Insert(0,NexusJson.Default));
+app.MapGet("/web",()=>Results.Redirect("/"));
+app.MapGet("/wasm",()=>Results.Redirect("/"));
 app.MapFallbackToFile("index.html");
 app.Run();

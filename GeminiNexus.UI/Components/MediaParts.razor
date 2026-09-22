@@ -4,10 +4,16 @@
         @foreach(var part in media)
         {
             @if(part.Mime is "image/png" or "image/jpeg" or "image/webp" or "image/gif")
-            {<img src="@part.Source" alt="תמונה בשיחה" loading="lazy" />}
+            {
+                @if(part.Source.Length>0){<img src="@part.Source" alt="תמונה בשיחה" loading="lazy" />}
+                else{<p class="muted">@part.Mime · קובץ Gemini</p>}
+            }
             else if(part.Mime is "audio/mpeg" or "audio/wav" or "audio/ogg")
-            {<audio controls preload="none" src="@part.Source"></audio>}
-            else{<p class="muted">@part.Mime · הנתונים זמינים בחלונית בדיקת הריצה</p>}
+            {
+                @if(part.Source.Length>0){<audio controls preload="none" src="@part.Source"></audio>}
+                else{<p class="muted">@part.Mime · קובץ Gemini</p>}
+            }
+            else{<p class="muted">@part.Mime · @(part.Source.Length>0?"הנתונים זמינים בחלונית בדיקת הריצה":"קובץ הועלה ומקושר לשיחה")</p>}
         }
     </details>
 }
@@ -23,6 +29,8 @@
             foreach(var part in doc.RootElement.EnumerateArray())
                 if(part.TryGetProperty("inlineData",out var data)&&data.TryGetProperty("mimeType",out var mime)&&data.TryGetProperty("data",out var bytes))
                 {var type=mime.GetString()??"application/octet-stream";media.Add((type,$"data:{type};base64,{bytes.GetString()}"));}
+                else if(part.TryGetProperty("fileData",out var file)&&file.TryGetProperty("mimeType",out var fileMime))
+                {media.Add((fileMime.GetString()??"application/octet-stream",""));}
         }
         catch(JsonException){}
     }

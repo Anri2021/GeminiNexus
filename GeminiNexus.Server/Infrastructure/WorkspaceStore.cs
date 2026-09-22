@@ -228,6 +228,37 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
         await tx.CommitAsync(ct);return c with{MessageCount=copy.Count};
     }
     private static Task<int> InsertMessage(DbConnection db,DbTransaction tx,Message m,CancellationToken ct)=>Execute(db,"INSERT INTO Messages VALUES(@id,@c,@r,@n,@role,@content,@parts,@time,@status)",tx,ct,("id",m.Id),("c",m.ConversationId),("r",m.RunId),("n",m.Ordinal),("role",m.Role),("content",m.Content),("parts",m.PartsJson),("time",m.CreatedAt),("status",m.Status));
+    public async Task SaveFile(string owner,Attachment file,string providerName,string providerUri,CancellationToken ct)
+    {
+        await using var db=await Open(ct);
+        await Execute(db,"INSERT INTO UserFiles(Id,OwnerId,Name,MimeType,SizeBytes,ProviderName,ProviderUri,State,ExpiresAt,CreatedAt) VALUES(@id,@o,@n,@m,@z,@p,@u,@s,@e,@t)",null,ct,
+            ("id",file.FileId),("o",owner),("n",file.Name),("m",file.MimeType),("z",file.SizeBytes),("p",providerName),("u",providerUri),("s",file.State),("e",file.ExpiresAt),("t",Now));
+    }
+    public async Task<Attachment[]> Files(string owner,CancellationToken ct)
+    {
+        await using var db=await Open(ct);await using var cmd=Command(db,"SELECT Id,Name,MimeType,SizeBytes,ProviderUri,State,ExpiresAt FROM UserFiles WHERE OwnerId=@o ORDER BY CreatedAt DESC LIMIT 100",null,("o",owner));
+        var files=new List<Attachment>();await using var r=await cmd.ExecuteReaderAsync(ct);
+        while(await r.ReadAsync(ct))files.Add(new(r.GetString(1),r.GetString(2),FileId:r.GetString(0),FileUri:r.GetString(4),SizeBytes:r.GetInt64(3),State:r.GetString(5),ExpiresAt:r.IsDBNull(6)?null:r.GetString(6)));
+        return files.ToArray();
+    }
+    public async Task<string> DeleteFile(string owner,string id,CancellationToken ct)
+    {
+        await using var db=await Open(ct);await using var tx=await db.BeginTransactionAsync(ct);await using var lookup=Command(db,"SELECT ProviderName FROM UserFiles WHERE Id=@id AND OwnerId=@o",tx,("id",id),("o",owner));
+        if(await lookup.ExecuteScalarAsync(ct) is not string providerName)throw new WorkspaceException(404,"הקובץ לא נמצא");await Execute(db,"DELETE FROM UserFiles WHERE Id=@id AND OwnerId=@o",tx,ct,("id",id),("o",owner));await tx.CommitAsync(ct);return providerName;
+    }
+    public async Task<string> FileProviderName(string owner,string id,CancellationToken ct)
+    {
+        await using var db=await Open(ct);await using var cmd=Command(db,"SELECT ProviderName FROM UserFiles WHERE Id=@id AND OwnerId=@o",null,("id",id),("o",owner));
+        return await cmd.ExecuteScalarAsync(ct) as string??throw new WorkspaceException(404,"הקובץ לא נמצא");
+    }
+    private static async Task<Attachment> RequireFile(DbConnection db,DbTransaction tx,string owner,string id,CancellationToken ct)
+    {
+        await using var cmd=Command(db,"SELECT Name,MimeType,SizeBytes,ProviderUri,State,ExpiresAt FROM UserFiles WHERE Id=@id AND OwnerId=@o",tx,("id",id),("o",owner));await using var r=await cmd.ExecuteReaderAsync(ct);
+        if(!await r.ReadAsync(ct))throw new WorkspaceException(404,"הקובץ המצורף לא נמצא");
+        var expires=r.IsDBNull(5)?null:r.GetString(5);if(expires is not null&&DateTimeOffset.TryParse(expires,out var expiry)&&expiry<=DateTimeOffset.UtcNow)throw new WorkspaceException(410,"תוקף הקובץ המצורף פג; יש להעלות אותו מחדש");
+        if(!r.GetString(4).Equals("active",StringComparison.OrdinalIgnoreCase))throw new WorkspaceException(409,"הקובץ עדיין אינו מוכן לעיבוד");
+        return new(r.GetString(0),r.GetString(1),FileId:id,FileUri:r.GetString(3),SizeBytes:r.GetInt64(2),State:r.GetString(4),ExpiresAt:expires);
+    }
     public async Task<Run> Enqueue(string owner,SubmitRun request,CancellationToken ct)
     {
         await writeGate.WaitAsync(ct);
@@ -258,7 +289,15 @@ public sealed class WorkspaceStore(ServerOptions options) : IWorkspaceStore
             foreach(var m in history.Where(m=>m.Status=="completed"))
                 contents.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject{["role"]=m.Role,["parts"]=System.Text.Json.Nodes.JsonNode.Parse(m.PartsJson)});
             var parts=new System.Text.Json.Nodes.JsonArray(new System.Text.Json.Nodes.JsonObject{["text"]=request.Prompt});
-            foreach(var a in request.Attachments??[])parts.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject{["inlineData"]=new System.Text.Json.Nodes.JsonObject{["mimeType"]=a.MimeType,["data"]=a.Data}});
+            foreach(var attachment in request.Attachments??[])
+            {
+                if(attachment.FileId.Length>0)
+                {
+                    var file=await RequireFile(db,tx,owner,attachment.FileId,ct);
+                    parts.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject{["fileData"]=new System.Text.Json.Nodes.JsonObject{["mimeType"]=file.MimeType,["fileUri"]=file.FileUri}});
+                }
+                else parts.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject{["inlineData"]=new System.Text.Json.Nodes.JsonObject{["mimeType"]=attachment.MimeType,["data"]=attachment.Data}});
+            }
             contents.Add((System.Text.Json.Nodes.JsonNode)new System.Text.Json.Nodes.JsonObject{["role"]="user",["parts"]=parts.DeepClone()});
             var run=new Run(Guid.NewGuid().ToString("N"),request.ConversationId,request.Model,"queued",Now,Now,0,null,false);
             var stored=JsonSerializer.Serialize(new StoredRunRequest(request,contents.ToJsonString()),NexusJson.Default.StoredRunRequest);

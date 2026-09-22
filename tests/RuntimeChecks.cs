@@ -38,6 +38,19 @@ Check(thinking.ToJsonString().Contains("thinkingLevel\":\"high")&&thinking.ToJso
 thinking=new();GeminiProvider.ApplyThinkingConfig(thinking,"gemini-2.5-flash",new(){ThinkingLevel="low"});Check(thinking.ToJsonString().Contains("thinkingBudget\":1024"),"Gemini 2.5 thinking budget mapping");
 thinking=new();GeminiProvider.ApplyThinkingConfig(thinking,"gemini-2.5-pro",new(){ThinkingLevel="high"});Check(thinking.ToJsonString().Contains("thinkingBudget\":32768"),"Gemini 2.5 Pro high thinking budget mapping");
 thinking=new();GeminiProvider.ApplyThinkingConfig(thinking,"gemini-3.8-flash",new(){ThinkingLevel="minimal"});Check(thinking.ToJsonString().Contains("thinkingLevel\":\"low"),"Unsupported Gemini 3 minimal level is normalized safely");
+thinking=new();GeminiProvider.ApplyThinkingConfig(thinking,"gemini-3.1-flash-image",new(){ThinkingLevel="medium"});Check(thinking.ToJsonString().Contains("thinkingLevel\":\"minimal"),"Nano Banana 2 thinking level is normalized to a supported value");
+thinking=new();GeminiProvider.ApplyThinkingConfig(thinking,"gemini-2.5-flash-image",new(){ThinkingLevel="high"});Check(!thinking.ContainsKey("thinkingConfig"),"Legacy Nano Banana omits unsupported thinking configuration");
+var nanoBanana=new ModelInfo("gemini-3.1-flash-image","Nano Banana 2",65536,32768,["generateContent"]);
+Check(ModelCatalogGrouping.Category(nanoBanana)==ModelCatalogGrouping.Image&&ModelCatalogGrouping.Family(nanoBanana)=="Nano Banana"&&ModelCatalogGrouping.SupportsChat(nanoBanana),"Nano Banana remains visible and chat-capable");
+var unknownModel=new ModelInfo("future-model-v1","Future Model",1000,1000,["predict"]);
+Check(ModelCatalogGrouping.Category(unknownModel)==ModelCatalogGrouping.Unclassified&&!ModelCatalogGrouping.SupportsChat(unknownModel),"Unknown catalog entries remain visible without enabling unsupported chat");
+if(args.Length>0)
+{
+    using var serverLaunch=JsonDocument.Parse(File.ReadAllText(Path.Combine(args[0],"GeminiNexus.Server","Properties","launchSettings.json")));
+    Check(serverLaunch.RootElement.GetProperty("profiles").GetProperty("https").GetProperty("applicationUrl").GetString()=="https://localhost:5000","Hosted server listens on HTTPS port 5000");
+    using var wasmLaunch=JsonDocument.Parse(File.ReadAllText(Path.Combine(args[0],"GeminiNexus.Client.Wasm","Properties","launchSettings.json")));
+    Check(wasmLaunch.RootElement.GetProperty("profiles").EnumerateObject().All(x=>x.Name.StartsWith("Standalone WASM only",StringComparison.Ordinal)),"Standalone WASM profiles are labeled as API-less");
+}
 var left=new float[1024];var right=new float[1024];Array.Fill(left,2);Array.Fill(right,3);ComputeKernels.Dot(left,right,"simd");
 var allocated=GC.GetAllocatedBytesForCurrentThread();for(var i=0;i<1000;i++)ComputeKernels.Dot(left,right,"simd");
 Check(GC.GetAllocatedBytesForCurrentThread()==allocated&&ComputeKernels.Dot(left,right,"simd")==6144,"SIMD hot path is zero-allocation");
@@ -54,7 +67,7 @@ await using(var renderer=new HtmlRenderer(services,services.GetRequiredService<I
     {
         var output=await renderer.RenderComponentAsync<GeminiNexus.UI.Pages.Workspace>();
         var markup=output.ToHtmlString();Check(markup.Contains("nexus-app")&&markup.Contains("composer")&&markup.Contains("sidebar"),"Real workspace Razor renders");
-        Check(markup.Contains("model-family")&&markup.Contains("model-version")&&markup.Contains("run-options"),"Model family, version, and thinking controls render");
+        Check(markup.Contains("model-kind")&&markup.Contains("model-family")&&markup.Contains("model-version")&&markup.Contains("run-options"),"Model category, family, version, and thinking controls render");
         if(args.Length>0)
         {
             var directory=Path.Combine(args[0],"artifacts","checks");Directory.CreateDirectory(directory);
@@ -88,7 +101,7 @@ sealed class Fixture:HttpMessageHandler
             "/api/settings"=>JsonContent.Create(new WorkspaceSettings(),NexusJson.Default.WorkspaceSettings),
             "/api/plugins"=>JsonContent.Create(new PluginList([]),NexusJson.Default.PluginList),
             "/api/limits"=>JsonContent.Create(new UploadLimit(8388608,100000),NexusJson.Default.UploadLimit),
-            "/api/models"=>JsonContent.Create(new ModelCatalog([new("test-model","Gemini · בדיקה",100000,8000,["generateContent"])]),NexusJson.Default.ModelCatalog),
+            "/api/models"=>JsonContent.Create(new ModelCatalog([new("gemini-3.1-flash-image","Nano Banana 2",65536,32768,["generateContent"]),new("future-model-v1","Future Model",1000,1000,["predict"])]),NexusJson.Default.ModelCatalog),
             "/api/conversations"=>JsonContent.Create(new ConversationPage([],null),NexusJson.Default.ConversationPage),
             "/api/runs"=>JsonContent.Create(Array.Empty<Run>(),NexusJson.Default.RunArray),
             _=>throw new Exception("Unexpected fixture route")

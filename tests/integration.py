@@ -15,7 +15,13 @@ class Gemini(http.server.BaseHTTPRequestHandler):
     def file(self):return {'file':{'name':'files/fixture','uri':f'http://127.0.0.1:{self.server.server_port}/v1beta/files/fixture','mimeType':'text/plain','sizeBytes':'12','state':'ACTIVE','expirationTime':'2099-01-01T00:00:00Z'}}
     def do_GET(self):
         if self.path.endswith('/files/fixture'):self.response(self.file());return
-        self.response({'models':[{'name':'models/test-model','displayName':'מודל בדיקה','inputTokenLimit':100000,'outputTokenLimit':8000,'supportedGenerationMethods':['generateContent']}]})
+        query=urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
+        if query.get('pageToken')==['page2']:
+            self.response({'models':[{'name':'models/future-model-v1','displayName':'Future Model','inputTokenLimit':1000,'outputTokenLimit':1000,'supportedGenerationMethods':['predict']}]});return
+        self.response({'models':[
+            {'name':'models/test-model','displayName':'מודל בדיקה','inputTokenLimit':100000,'outputTokenLimit':8000,'supportedGenerationMethods':['generateContent']},
+            {'name':'models/gemini-3.1-flash-image','displayName':'Nano Banana 2','inputTokenLimit':65536,'outputTokenLimit':32768,'supportedGenerationMethods':['generateContent']}
+        ],'nextPageToken':'page2'})
     def do_DELETE(self):self.response({})
     def do_POST(self):
         raw=self.rfile.read(int(self.headers.get('Content-Length',0)))
@@ -102,6 +108,8 @@ class Contracts(unittest.TestCase):
     def test_01_auth_and_csrf(self):
         self.assertEqual(Client(self.url).call('/api/conversations')[0],401)
         self.assertEqual(self.admin.call('/api/conversations','POST',{},csrf=False)[0],403)
+        status,catalog=self.admin.call('/api/models');self.assertEqual(status,200,catalog)
+        self.assertEqual({item['id'] for item in catalog['items']},{'test-model','gemini-3.1-flash-image','future-model-v1'})
     def test_02_persistence_context_and_replay(self):
         c=self.conversation();status,r=self.submit(c);self.assertEqual(status,202,r);self.assertEqual(self.wait(r)['status'],'completed')
         status,page=self.admin.call(f"/api/conversations/{c['id']}/messages");self.assertEqual([m['role'] for m in page['items']],['user','model']);self.assertIn('המקבילי',page['items'][1]['content'])

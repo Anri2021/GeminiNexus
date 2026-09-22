@@ -78,7 +78,8 @@ jobs:
           Database__ConnectionString: Data Source=${{ runner.temp }}/nexus-development.db;Default Timeout=15
           Gemini__ApiKey: fixture-key
         run: |
-          dotnet run --project GeminiNexus.Server -c Release --no-launch-profile > "$RUNNER_TEMP/development-host.log" 2>&1 &
+          dotnet build GeminiNexus.Server -c Release --disable-build-servers
+          dotnet run --project GeminiNexus.Server -c Release --no-build --no-launch-profile > "$RUNNER_TEMP/development-host.log" 2>&1 &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
           ready=false

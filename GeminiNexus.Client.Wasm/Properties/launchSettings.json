@@ -1,7 +1,7 @@
 {
   "$schema": "https://json.schemastore.org/launchsettings.json",
   "profiles": {
-    "http": {
+    "Standalone WASM only - no API (http)": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": true,
@@ -11,7 +11,7 @@
         "ASPNETCORE_ENVIRONMENT": "Development"
       }
     },
-    "https": {
+    "Standalone WASM only - no API (https)": {
       "commandName": "Project",
       "dotnetRunMessages": true,
       "launchBrowser": true,

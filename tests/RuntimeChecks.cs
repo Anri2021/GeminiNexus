@@ -48,8 +48,9 @@ if(args.Length>0)
 {
     using var serverLaunch=JsonDocument.Parse(File.ReadAllText(Path.Combine(args[0],"GeminiNexus.Server","Properties","launchSettings.json")));
     Check(serverLaunch.RootElement.GetProperty("profiles").GetProperty("https").GetProperty("applicationUrl").GetString()=="https://localhost:5000","Hosted server listens on HTTPS port 5000");
-    using var wasmLaunch=JsonDocument.Parse(File.ReadAllText(Path.Combine(args[0],"GeminiNexus.Client.Wasm","Properties","launchSettings.json")));
-    Check(wasmLaunch.RootElement.GetProperty("profiles").EnumerateObject().All(x=>x.Name.StartsWith("Standalone WASM only",StringComparison.Ordinal)),"Standalone WASM profiles are labeled as API-less");
+    Check(!File.Exists(Path.Combine(args[0],"GeminiNexus.Client.Wasm","Properties","launchSettings.json")),"WASM has no standalone launch ports");
+    Check(!Directory.Exists(Path.Combine(args[0],"GeminiNexus.Client.Maui")),"MAUI client is removed");
+    Check(!File.Exists(Path.Combine(args[0],"deploy","Caddyfile")),"Reverse-proxy configuration is external to the repository");
 }
 var left=new float[1024];var right=new float[1024];Array.Fill(left,2);Array.Fill(right,3);ComputeKernels.Dot(left,right,"simd");
 var allocated=GC.GetAllocatedBytesForCurrentThread();for(var i=0;i<1000;i++)ComputeKernels.Dot(left,right,"simd");

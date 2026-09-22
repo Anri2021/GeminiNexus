@@ -92,13 +92,3 @@ jobs:
           name: nexus-publish
           path: artifacts/publish
           retention-days: 7
-  maui-windows:
-    runs-on: windows-latest
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-dotnet@v4
-        with:
-          global-json-file: global.json
-      - run: dotnet workload install maui-windows --skip-manifest-update
-      - run: dotnet build GeminiNexus.Client.Maui -c Release -f net10.0-windows10.0.19041.0 -p:NexusMauiTargets=net10.0-windows10.0.19041.0

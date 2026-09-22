@@ -2,8 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 output="${1:-$PWD/artifacts/publish}"
+client_output="$(mktemp -d)"
+trap 'rm -rf "$client_output"' EXIT
 g++ -O3 -shared -fPIC native/nexus_native.cpp -o native/libnexus_native.so
 dotnet publish GeminiNexus.Server -c Release -r linux-x64 -p:PublishAot=true -p:StripSymbols=true -o "$output/server" --disable-build-servers
-dotnet publish GeminiNexus.Client.Wasm -c Release -o "$output/client" --disable-build-servers
+dotnet publish GeminiNexus.Client.Wasm -c Release -o "$client_output" --disable-build-servers
 mkdir -p "$output/server/wwwroot"
-cp -R "$output/client/wwwroot/." "$output/server/wwwroot/"
+cp -R "$client_output/wwwroot/." "$output/server/wwwroot/"

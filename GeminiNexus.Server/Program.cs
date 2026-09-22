@@ -13,6 +13,7 @@ using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.HttpOverrides;
 using Microsoft.AspNetCore.Http.Features;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.StaticFiles;
 
 var publishedWebRoot=Path.Combine(AppContext.BaseDirectory,"wwwroot");
@@ -21,6 +22,7 @@ var builder=WebApplication.CreateSlimBuilder(new WebApplicationOptions
     Args=args,
     WebRootPath=Directory.Exists(publishedWebRoot)?publishedWebRoot:"wwwroot"
 });
+if(builder.Environment.IsDevelopment())builder.WebHost.UseStaticWebAssets();
 var configuredSettings=Environment.GetEnvironmentVariable("NEXUS_CONFIG");
 var settingsCandidates=new[]
 {

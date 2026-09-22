@@ -580,6 +580,8 @@ dotnet run --project ./GeminiNexus.Server --launch-profile https
 
 ב־Visual Studio יש להגדיר את `GeminiNexus.Server` כ־Startup Project ולבחור בפרופיל `https`. לפרויקט `GeminiNexus.Client.Wasm` אין פרופיל הרצה עצמאי; הוא נבנה כחבילת הדפדפן ומוגש דרך השרת בלבד.
 
+בהרצת Development השרת טוען במפורש את Static Web Assets של Client.Wasm, ולכן `Start` מתוך Visual Studio חייב להציג את סביבת העבודה ב־`https://localhost:5000/` ולא תשובת 404. ה־CI מפעיל גם את מסלול האירוח הזה ובודק את `index.html` ואת `/_framework/blazor.boot.json`.
+
 אפשר גם להעתיק ידנית את `nexus.settings.example.json` ל־`nexus.settings.json` ולערוך אותו. כדי להשתמש בקובץ במקום אחר מגדירים `NEXUS_CONFIG` לנתיב המלא שלו. משתני סביבה ופרמטרים משורת הפקודה גוברים על הקובץ.
 
 הרצה ישירה ללא פרופיל משתמשת גם היא ב־HTTPS/5000:

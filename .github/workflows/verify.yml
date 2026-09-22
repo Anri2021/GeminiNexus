@@ -68,6 +68,38 @@ jobs:
         run: |
           g++ -O3 -shared -fPIC native/nexus_native.cpp -o native/libnexus_native.so
           bash scripts/publish.sh
+      - name: Development host serves WASM on port 5000
+        env:
+          ASPNETCORE_ENVIRONMENT: Development
+          Urls: http://127.0.0.1:5000
+          Auth__AllowInsecureLocal: 'true'
+          Auth__AdminPassword: development-host-test-password
+          Auth__KeyPath: ${{ runner.temp }}/nexus-development-keys
+          Database__ConnectionString: Data Source=${{ runner.temp }}/nexus-development.db;Default Timeout=15
+          Gemini__ApiKey: fixture-key
+        run: |
+          dotnet run --project GeminiNexus.Server -c Release --no-launch-profile > "$RUNNER_TEMP/development-host.log" 2>&1 &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=false
+          for attempt in {1..100}; do
+            if curl --fail --silent http://127.0.0.1:5000/ --output "$RUNNER_TEMP/index.html"; then
+              ready=true
+              break
+            fi
+            if ! kill -0 "$server_pid" 2>/dev/null; then
+              cat "$RUNNER_TEMP/development-host.log"
+              exit 1
+            fi
+            sleep 0.1
+          done
+          if [ "$ready" != true ]; then
+            cat "$RUNNER_TEMP/development-host.log"
+            exit 1
+          fi
+          test -s "$RUNNER_TEMP/index.html"
+          grep --fixed-strings '<div id="app">' "$RUNNER_TEMP/index.html"
+          curl --fail --silent --show-error http://127.0.0.1:5000/_framework/blazor.boot.json --output /dev/null
       - name: Server integration contracts
         run: python tests/integration.py --server-exe "$GITHUB_WORKSPACE/artifacts/publish/server/GeminiNexus.Server"
       - name: Source and rendering checks

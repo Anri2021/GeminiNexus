@@ -119,7 +119,7 @@ class Contracts(unittest.TestCase):
         for path in [f"/api/conversations/{c['id']}/messages",f"/api/runs/{r['id']}",f"/api/runs/{r['id']}/events?format=json",f"/api/runs/{r['id']}/metrics"]:self.assertEqual(self.other.call(path)[0],404,path)
     def test_03a_thought_summary_stream_and_storage(self):
         c=self.conversation();_,r=self.submit(c,'THINK');self.assertEqual(self.wait(r)['status'],'completed')
-        _,events=self.admin.call(f"/api/runs/{r['id']}/events?format=json");self.assertTrue(any(e['kind']=='thought' and 'בודק אפשרויות' in e['json'] for e in events['items']))
+        _,events=self.admin.call(f"/api/runs/{r['id']}/events?format=json");thoughts=[json.loads(e['json'])['text'] for e in events['items'] if e['kind']=='thought'];self.assertTrue(any('בודק אפשרויות' in text for text in thoughts))
         _,page=self.admin.call(f"/api/conversations/{c['id']}/messages");model=page['items'][-1];self.assertIn('"thought":true',model['partsJson']);self.assertNotIn('בודק אפשרויות',model['content'])
     def test_03b_file_upload_reference_and_ownership(self):
         status,file=self.admin.upload();self.assertEqual(status,201,file);self.assertEqual(file['sizeBytes'],11);self.assertEqual(file['data'],'')

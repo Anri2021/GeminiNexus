@@ -1,9 +1,9 @@
 <Solution>
+  <Project Path="GeminiNexus.Server/GeminiNexus.Server.csproj" />
   <Project Path="GeminiNexus.Client.Maui/GeminiNexus.Client.Maui.csproj">
     <Deploy Solution="Debug|*" />
   </Project>
   <Project Path="GeminiNexus.Client.Wasm/GeminiNexus.Client.Wasm.csproj" />
-  <Project Path="GeminiNexus.Server/GeminiNexus.Server.csproj" />
   <Project Path="GeminiNexus.Shared/GeminiNexus.Shared.csproj" />
   <Project Path="GeminiNexus.UI/GeminiNexus.UI.csproj" />
 </Solution>

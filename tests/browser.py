@@ -23,8 +23,12 @@ try:
         try:
             page.goto(url,wait_until='domcontentloaded')
             expect(page.locator('.welcome')).to_be_visible(timeout=60000)
+            expect(page.get_by_role('combobox',name='סוג יכולת המודל')).to_be_visible()
             expect(page.get_by_role('combobox',name='משפחת מודל')).to_be_visible()
-            expect(page.get_by_role('combobox',name='גרסת מודל')).to_be_visible()
+            expect(page.get_by_role('combobox',name='מודל וגרסה')).to_be_visible()
+            page.get_by_role('combobox',name='סוג יכולת המודל').select_option(label='תמונה')
+            expect(page.get_by_role('combobox',name='משפחת מודל')).to_have_value('Nano Banana')
+            expect(page.get_by_role('combobox',name='מודל וגרסה')).to_have_value('gemini-3.1-flash-image')
             page.locator('.run-options summary').click()
             expect(page.locator('.run-menu')).to_be_visible()
             expect(page.get_by_role('combobox',name='רמת חשיבה')).to_have_value('medium')

@@ -89,7 +89,8 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
         // The owned conversation snapshot always wins over provider extension fields.
         config["contents"]=contents;
         config["systemInstruction"]=new JsonObject{["parts"]=new JsonArray(new JsonObject{["text"]=settings.SystemInstruction})};
-        PluginEngine.AddBuiltInToolDeclarations(config);
+        // Native image models use generateContent but reject function declarations.
+        if(!IsNativeImageModel(stored.Request.Model))PluginEngine.AddBuiltInToolDeclarations(config);
         var generation=config["generationConfig"] as JsonObject??new JsonObject();
         config["generationConfig"]=generation.Parent is null?generation:generation.DeepClone();generation=config["generationConfig"]!.AsObject();
         generation["temperature"]=settings.Temperature;generation["maxOutputTokens"]=settings.MaxOutputTokens;
@@ -112,9 +113,11 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
     internal static void ApplyThinkingConfig(JsonObject generation,string model,GenerationSettings settings)
     {
         if(!model.StartsWith("gemini-3",StringComparison.OrdinalIgnoreCase)&&!model.StartsWith("gemini-2.5",StringComparison.OrdinalIgnoreCase)){generation.Remove("thinkingConfig");return;}
+        if(IsNativeImageModel(model)&&!model.StartsWith("gemini-3.1-flash",StringComparison.OrdinalIgnoreCase)){generation.Remove("thinkingConfig");return;}
         var thinking=new JsonObject{{"includeThoughts",settings.IncludeThoughts}};var level=(settings.ThinkingLevel??"medium").ToLowerInvariant();
         if(model.StartsWith("gemini-3",StringComparison.OrdinalIgnoreCase))
         {
+            if(model.StartsWith("gemini-3.1-flash",StringComparison.OrdinalIgnoreCase)&&model.Contains("-image",StringComparison.OrdinalIgnoreCase))level=level=="high"?"high":"minimal";
             if(level=="minimal"&&(model.StartsWith("gemini-3.8",StringComparison.OrdinalIgnoreCase)||model.StartsWith("gemini-3.7",StringComparison.OrdinalIgnoreCase)||model.StartsWith("gemini-3.1-pro",StringComparison.OrdinalIgnoreCase)))level="low";
             if(level!="auto")thinking["thinkingLevel"]=level;
         }
@@ -125,6 +128,7 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
         }
         generation["thinkingConfig"]=thinking;
     }
+    internal static bool IsNativeImageModel(string model)=>model.StartsWith("gemini-",StringComparison.OrdinalIgnoreCase)&&model.Contains("-image",StringComparison.OrdinalIgnoreCase);
     public async IAsyncEnumerable<ProviderChunk> Stream(string model,string payload,[EnumeratorCancellation] CancellationToken ct)
     {
         ValidateModel(model);using var request=Request(HttpMethod.Post,$"models/{model}:streamGenerateContent?alt=sse",payload);
@@ -173,10 +177,10 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
         try
         {
             if(cached is not null&&catalogExpires>DateTimeOffset.UtcNow)return cached;
-            var list=new List<ModelInfo>();string? page=null;
+            var list=new List<ModelInfo>();string? page=null;var pageTokens=new HashSet<string>(StringComparer.Ordinal);
             do
             {
-                var path="models?pageSize=100"+(page is null?"":"&pageToken="+Uri.EscapeDataString(page));
+                var path="models?pageSize=1000"+(page is null?"":"&pageToken="+Uri.EscapeDataString(page));
                 using var response=await SendIdempotent(()=>Request(HttpMethod.Get,path),ct);
                 var body=await ReadBounded(response.Content,options.MaxEventBytes,ct);if(!response.IsSuccessStatusCode)throw new WorkspaceException(502,"לא ניתן לטעון מודלים");
                 using var doc=JsonDocument.Parse(body);
@@ -186,7 +190,8 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
                     list.Add(new(m.GetProperty("name").GetString()!.Replace("models/",""),m.GetProperty("displayName").GetString()!,m.TryGetProperty("inputTokenLimit",out var i)?i.GetInt32():0,m.TryGetProperty("outputTokenLimit",out var o)?o.GetInt32():0,methods));
                 }
                 page=doc.RootElement.TryGetProperty("nextPageToken",out var p)?p.GetString():null;
-            }while(!string.IsNullOrEmpty(page)&&list.Count<2000);
+                if(!string.IsNullOrEmpty(page)&&!pageTokens.Add(page))throw new WorkspaceException(502,"הספק החזיר עימוד מודלים לא תקין");
+            }while(!string.IsNullOrEmpty(page));
             cached=new(list.ToArray());catalogExpires=DateTimeOffset.UtcNow.AddMinutes(10);return cached;
         }
         finally{catalogGate.Release();}

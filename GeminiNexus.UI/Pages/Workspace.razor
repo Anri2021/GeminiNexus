@@ -57,14 +57,20 @@ else
                 @if(hasMore){<button class="load-history" @onclick="Older" disabled="@loadingHistory">@(loadingHistory?"טוען…":"↑ טעינת הודעות קודמות")</button>}
                 <Virtualize @ref="messageVirtualizer" Items="messages" Context="message" OverscanCount="@settings.OverscanCount" ItemSize="160">
                     <article @key="message.Id" data-message="@message.Id" class="message @(message.Role=="user"?"user-message":"model-message")">
-                        @if(message.Role=="model"){<span class="message-star">✦</span>}
-                        <div class="message-inner"><MessageBody Content="@message.Content" /><MediaParts PartsJson="@message.PartsJson" />
+                        @if(message.Role=="model"){<button class="message-star thought-toggle @(expandedThoughts.Contains(message.Id)?"expanded":"")" @onclick="()=>ToggleThought(message.Id)" title="הצגה או מזעור של תקציר החשיבה" aria-expanded="@expandedThoughts.Contains(message.Id)">✦</button>}
+                        <div class="message-inner">
+                        @if(message.Role=="model"&&expandedThoughts.Contains(message.Id))
+                        {
+                            var thought=ThoughtText(message.PartsJson);
+                            <div class="thought-panel"><strong>תקציר החשיבה</strong>@if(thought.Length>0){<MessageBody Content="@thought" />}else{<p class="muted">המודל לא החזיר תקציר חשיבה עבור תשובה זו.</p>}</div>
+                        }
+                        <MessageBody Content="@message.Content" /><MediaParts PartsJson="@message.PartsJson" />
                         @if(message.Status!="completed"){<span class="status-badge">@StatusLabel(message.Status)</span>}
                         <div class="message-actions"><button @onclick="()=>Copy(message.Content)">העתקה</button><button @onclick="()=>Fork(message)">הסתעפות</button>@if(message.Role=="user"){<button @onclick="()=>Edit(message)">עריכה והסתעפות</button>}@if(message.RunId.Length>0){<button @onclick="()=>Inspect(message.RunId)">נתוני API</button>}</div></div>
                     </article>
                 </Virtualize>
                 @if(currentRun is not null&&IsActive(currentRun))
-                {<article class="message model-message streaming"><span class="message-star pulse">✦</span><div class="message-inner">@if(streaming.Length==0){<div class="thinking">@(currentRun.Status=="queued"?"ממתין בתור…":"חושב…")<span>● ● ●</span></div>}else{<MessageBody Content="@streaming" />}<small class="muted">@StatusLabel(currentRun.Status) · אפשר לעבור לשיחה אחרת</small></div></article>}
+                {<article class="message model-message streaming"><button class="message-star thought-toggle pulse @(currentThoughtExpanded?"expanded":"")" @onclick="()=>currentThoughtExpanded=!currentThoughtExpanded" title="הצגת החשיבה בזמן אמת" aria-expanded="@currentThoughtExpanded">✦</button><div class="message-inner">@if(currentThoughtExpanded){<div class="thought-panel live"><strong>תקציר החשיבה בזמן אמת</strong>@if(streamingThoughts.Length>0){<MessageBody Content="@streamingThoughts" />}else{<p class="muted">ממתין לתקציר החשיבה…</p>}</div>}@if(streaming.Length==0){<div class="thinking">@(currentRun.Status=="queued"?"ממתין בתור…":"חושב…")<span>● ● ●</span></div>}else{<MessageBody Content="@streaming" />}<small class="muted">@StatusLabel(currentRun.Status) · אפשר לעבור לשיחה אחרת</small></div></article>}
                 <div id="newer-sentinel"></div>
                 @if(hasNewer){<button class="load-history" @onclick="Newer" disabled="@loadingHistory">↓ טעינת הודעות חדשות יותר</button>}
                 <div id="chat-bottom"></div>
@@ -74,7 +80,11 @@ else
             @if(attachments.Count>0){<div class="attachment-list">@foreach(var file in attachments){<span title="@($"{file.MimeType} · {FormatBytes(file.SizeBytes)}")">@file.Name <small>@FormatBytes(file.SizeBytes)</small><button @onclick="()=>attachments.Remove(file)">×</button></span>}</div>}
             @if(uploadingFiles){<div class="muted" role="status">@uploadStatus</div>}
             <textarea @bind="prompt" @bind:event="oninput" @onkeydown="KeyDown" placeholder="אפשר לשאול הכול…" aria-label="הודעה חדשה" rows="2"></textarea>
-            <div class="composer-bottom"><div class="composer-tools"><label class="attach-button" title="הוספת קובץ">＋<InputFile OnChange="Attach" multiple /></label><select @bind="model" aria-label="בחירת מודל">@foreach(var m in models){<option value="@m.Id">@m.Name</option>}@if(!models.Any(m=>m.Id==model)){<option value="@model">@model</option>}</select><button class="icon" @onclick='()=>panel="settings"' title="הגדרות יצירה">☷</button></div>
+            <div class="composer-bottom"><div class="composer-tools"><label class="attach-button" title="הוספת קובץ">＋<InputFile OnChange="Attach" multiple /></label>
+            <select class="model-family" value="@modelFamily" @onchange="ModelFamilyChanged" aria-label="משפחת מודל" title="משפחת מודל">@foreach(var family in ModelFamilies){<option value="@family">@family</option>}</select>
+            <select class="model-version" value="@model" @onchange="ModelChanged" aria-label="גרסת מודל" title="גרסת מודל">@foreach(var m in FamilyModels){<option value="@m.Id" title="@m.Name">@ModelVersionLabel(m)</option>}@if(!models.Any(m=>m.Id==model)){<option value="@model">@model</option>}</select>
+            <details class="run-options"><summary title="אפשרויות חשיבה">✦ @ThinkingLabel</summary><div class="run-menu"><label>רמת חשיבה<select @bind="thinkingLevel"><option value="auto">אוטומטית</option><option value="minimal">מינימלית</option><option value="low">נמוכה / מהירה</option><option value="medium">בינונית / מאוזנת</option><option value="high">גבוהה / מעמיקה</option></select></label><label class="check-row"><input type="checkbox" @bind="includeThoughts" /> הצגת תקציר חשיבה</label></div></details>
+            <button class="icon" @onclick='()=>panel="settings"' title="הגדרות יצירה מתקדמות">☷</button></div>
             @if(currentRun is not null&&IsActive(currentRun)){<button class="send-button stop" @onclick="Cancel" title="עצירת העיבוד">■</button>}
             else{<button class="send-button" @onclick="Send" disabled="@(busy||uploadingFiles||string.IsNullOrWhiteSpace(prompt))" title="שליחה">↑</button>}</div>
         </div><div class="composer-caption">תוכן שנוצר ב־AI עשוי להיות שגוי. כדאי לבדוק פרטים חשובים. <span>@(messages.Count) הודעות בבאפר</span></div></div>
@@ -101,6 +111,8 @@ else
             <label>תקציב טוקנים לקלט<input type="number" min="1" @bind="tokenBudget" /></label>
             <label>מקסימום טוקני פלט<input type="number" min="1" @bind="outputTokens" /></label>
             <label>טמפרטורה<input type="number" min="0" max="2" step="0.1" @bind="temperature" /></label>
+            <label>רמת חשיבה<select @bind="thinkingLevel"><option value="auto">אוטומטית</option><option value="minimal">מינימלית</option><option value="low">נמוכה</option><option value="medium">בינונית</option><option value="high">גבוהה</option></select></label>
+            <label class="check-row"><input type="checkbox" @bind="includeThoughts" /> בקשת תקציר חשיבה מהמודל</label>
             <label>הוראות מערכת<textarea @bind="systemInstruction" rows="4"></textarea></label>
             <label>הרחבות בקשת Google — JSON<textarea class="json-editor" dir="ltr" @bind="advancedJson" rows="7"></textarea></label>
             <small class="muted">למשל tools, safetySettings או thinkingConfig בתוך generationConfig. השרת קובע את ההיסטוריה ותקציבי הקלט והפלט.</small>
@@ -179,23 +191,27 @@ else
     private UserAccount[] accounts=[];
     private RunMetrics? debugMetrics;
     private string accountName="",accountEmail="",accountPassword="",oldPassword="",resetEmail="",resetToken="",resetNewPassword="";
-    private UserInfo? user;private bool loading=true,busy,uploadingFiles,sidebarOpen,hasMore,hasNewer,loadingHistory,loadingConversations,resetMode;private string? error,panel,conversationCursor,resetNotice;
-    private string loginName="admin",password="",search="",prompt="",model="gemini-3.8-flash",streaming="";
+    private UserInfo? user;private bool loading=true,busy,uploadingFiles,sidebarOpen,hasMore,hasNewer,loadingHistory,loadingConversations,resetMode,includeThoughts=true,currentThoughtExpanded;private string? error,panel,conversationCursor,resetNotice;
+    private string loginName="admin",password="",search="",prompt="",model="gemini-3.8-flash",modelFamily="Gemini Flash",thinkingLevel="medium",streaming="",streamingThoughts="";
     private List<Conversation> conversations=[];private List<Message> messages=[];private Run[] runs=[];private ModelInfo[] models=[];private Conversation? active;private Run? currentRun;
     private PluginList plugins=new([]);private ProviderCapabilityCatalog providerCapabilities=new([]);private ProviderOperationList providerOperations=new([]);private List<Attachment> attachments=[];private WorkspaceSettings settings=new();private UploadLimit limits=new(104857600,100000,10,52428800);
     private int conversationPageSize=30,prefetchPages=1,pageSize=30,bufferTurns=60,bufferMb=4,overscan=4,renderMs=80,contextTurns=20,tokenBudget=1000000,outputTokens=8192;private double temperature=1;
     private string systemInstruction="",advancedJson="{}",pluginName="",pluginKind="prefix",pluginExecution="server",pluginText="",pluginFind="",labMethod="GET",labPath="models",labBody="{}",labResult="",providerCapability="interactions",providerMethod="POST",providerResource="interactions",providerBody="{}",uploadStatus="";
     private string inspectedRun="",debugTab="summary";private List<RunEvent> debugEvents=[];private bool debugMore;
+    private readonly HashSet<string> expandedThoughts=[];
     private Virtualize<Message>? messageVirtualizer;private IJSObjectReference? module;private DotNetObjectReference<Workspace>? reference;private readonly CancellationTokenSource lifetime=new();private CancellationTokenSource? selection,searchCancel;private Task? polling,streamTask;private bool setupNeeded;
     private string PanelTitle=>panel switch{"settings"=>"העדפות ובאפרינג","plugins"=>"התוספים שלך","provider"=>"יכולות Gemini","lab"=>"מעבדת API","account"=>"חשבון ואבטחה",_=>"בדיקת ריצה"};
     private static bool IsActive(Run r)=>r.Status is "queued" or "running";
     private static string StatusLabel(string s)=>s switch{"queued"=>"בתור","running"=>"מעבד","completed"=>"הושלם","cancelled"=>"בוטל","failed"=>"נכשל","interrupted"=>"נקטע","blocked"=>"נחסם","truncated"=>"מגבלת פלט","requires_action"=>"נדרשת פעולת כלי",_=>s};
+    private IEnumerable<string> ModelFamilies=>models.Select(ModelFamily).Append(modelFamily).Distinct(StringComparer.Ordinal).OrderBy(x=>x);
+    private IEnumerable<ModelInfo> FamilyModels=>models.Where(m=>ModelFamily(m)==modelFamily).OrderByDescending(m=>m.Id);
+    private string ThinkingLabel=>thinkingLevel switch{"auto"=>"אוטומטי","minimal"=>"מינימלי","low"=>"מהיר","medium"=>"מאוזן","high"=>"מעמיק",_=>thinkingLevel};
     protected override async Task OnInitializedAsync()
     {var query=Navigation.ToAbsoluteUri(Navigation.Uri).Query.TrimStart('?').Split('&',StringSplitOptions.RemoveEmptyEntries);foreach(var item in query){var pair=item.Split('=',2);if(pair.Length==2&&pair[0]=="resetToken"){resetToken=Uri.UnescapeDataString(pair[1].Replace('+',' '));resetMode=true;break;}}try{user=await Api.Get("auth/me",NexusJson.Default.UserInfo,lifetime.Token);await InitializeWorkspace();}catch(HttpRequestException ex)when(ex.StatusCode==System.Net.HttpStatusCode.Unauthorized){}catch(Exception ex){error=ex.Message;}finally{loading=false;}}
     private async Task InitializeWorkspace()
     {
         settings=await Api.Get("settings",NexusJson.Default.WorkspaceSettings,lifetime.Token);SetFields();plugins=await Api.Get("plugins",NexusJson.Default.PluginList,lifetime.Token);limits=await Api.Get("limits",NexusJson.Default.UploadLimit,lifetime.Token);
-        try{models=(await Api.Get("models",NexusJson.Default.ModelCatalog,lifetime.Token)).Items.Where(m=>m.Methods.Contains("generateContent")).ToArray();if(models.Length>0&&!models.Any(m=>m.Id==model))model=models[0].Id;if(tokenBudget==24000&&models.FirstOrDefault(m=>m.Id==model) is {InputTokenLimit:>24000} selected)tokenBudget=Math.Min(2000000,selected.InputTokenLimit);}catch(Exception ex){error=ex.Message;}
+        try{models=(await Api.Get("models",NexusJson.Default.ModelCatalog,lifetime.Token)).Items.Where(m=>m.Methods.Contains("generateContent")&&!IsSpecializedModel(m.Id)).ToArray();if(models.Length>0&&!models.Any(m=>m.Id==model))model=models[0].Id;modelFamily=ModelFamily(models.FirstOrDefault(m=>m.Id==model)??new(model,model,0,0,[]));if(tokenBudget==24000&&models.FirstOrDefault(m=>m.Id==model) is {InputTokenLimit:>24000} selected)tokenBudget=Math.Min(2000000,selected.InputTokenLimit);}catch(Exception ex){error=ex.Message;}
         await ReloadConversations();await RefreshRuns();setupNeeded=true;polling??=Poll();
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -213,8 +229,8 @@ else
     private async Task CreateAccount()=>await Guard(async()=>{await Api.Send(HttpMethod.Post,"admin/users",new CreateUserRequest(accountName,accountPassword,accountEmail),NexusJson.Default.CreateUserRequest,NexusJson.Default.UserInfo);accountName=accountEmail=accountPassword="";accounts=await Api.Get("admin/users",NexusJson.Default.UserAccountArray);});
     private async Task RevokeAccount(UserAccount account)=>await Guard(async()=>{await Api.Action(HttpMethod.Delete,$"admin/users/{account.Id}/sessions");if(account.Id==user?.Id){ClearSession();return;}accounts=await Api.Get("admin/users",NexusJson.Default.UserAccountArray);});
     private async Task ChangeAccountPassword()=>await Guard(async()=>{await Api.Save(HttpMethod.Put,"auth/password",new ChangePassword(oldPassword,accountPassword),NexusJson.Default.ChangePassword);ClearSession();});
-    private void ClearSession(){selection?.Cancel();searchCancel?.Cancel();pendingRequest=null;user=null;active=null;currentRun=null;streaming=prompt=password=accountPassword=oldPassword="";attachments.Clear();conversations.Clear();messages.Clear();debugEvents.Clear();runs=[];accounts=[];plugins=new([]);panel=null;}
-    private async Task Logout()=>await Guard(async()=>{await Api.Action(HttpMethod.Post,"auth/logout");selection?.Cancel();searchCancel?.Cancel();pendingRequest=null;user=null;active=null;currentRun=null;streaming="";prompt="";attachments.Clear();conversations.Clear();plugins=new([]);debugEvents.Clear();panel=null;messages.Clear();runs=[];await InvokeModule("disconnect");});
+    private void ClearSession(){selection?.Cancel();searchCancel?.Cancel();pendingRequest=null;user=null;active=null;currentRun=null;streaming=streamingThoughts=prompt=password=accountPassword=oldPassword="";attachments.Clear();conversations.Clear();messages.Clear();expandedThoughts.Clear();debugEvents.Clear();runs=[];accounts=[];plugins=new([]);panel=null;}
+    private async Task Logout()=>await Guard(async()=>{await Api.Action(HttpMethod.Post,"auth/logout");selection?.Cancel();searchCancel?.Cancel();pendingRequest=null;user=null;active=null;currentRun=null;streaming=streamingThoughts="";prompt="";attachments.Clear();conversations.Clear();plugins=new([]);expandedThoughts.Clear();debugEvents.Clear();panel=null;messages.Clear();runs=[];await InvokeModule("disconnect");});
     private async Task Guard(Func<Task> action){try{error=null;await action();}catch(OperationCanceledException){}catch(HttpRequestException ex)when(ex.StatusCode==System.Net.HttpStatusCode.Unauthorized){ClearSession();error=ex.Message;}catch(Exception ex){error=ex.Message;}await InvokeAsync(StateHasChanged);}
     private async Task ReloadConversations(){var query=search;var page=await Api.Get("conversations?take="+settings.ConversationPageSize+"&search="+Uri.EscapeDataString(query),NexusJson.Default.ConversationPage);if(query!=search)return;conversations=page.Items.ToList();conversationCursor=page.NextCursor;}
     private async Task LoadMoreConversations()=>await Guard(async()=>{if(loadingConversations||conversationCursor is null)return;loadingConversations=true;try{var page=await Api.Get("conversations?take="+settings.ConversationPageSize+"&cursor="+Uri.EscapeDataString(conversationCursor)+"&search="+Uri.EscapeDataString(search),NexusJson.Default.ConversationPage);conversations.AddRange(page.Items.Where(c=>!conversations.Any(x=>x.Id==c.Id)));conversationCursor=page.NextCursor;if(conversations.Count>500)conversations.RemoveRange(0,conversations.Count-500);}finally{loadingConversations=false;}});
@@ -223,7 +239,7 @@ else
     private async Task NewChat()=>await Guard(async()=>{var c=await Api.Send(HttpMethod.Post,"conversations",new CreateConversation("שיחה חדשה",model),NexusJson.Default.CreateConversation,NexusJson.Default.Conversation);await ReloadConversations();await SelectChat(c);});
     private async Task SelectChat(Conversation c)=>await Guard(async()=>
     {
-        selection?.Cancel();selection?.Dispose();selection=new();var ct=selection.Token;active=c;model=c.Model;prompt="";sidebarOpen=false;messages=[];streaming="";currentRun=null;attachments.Clear();await InvokeModule("disconnect");
+        selection?.Cancel();selection?.Dispose();selection=new();var ct=selection.Token;active=c;model=c.Model;modelFamily=ModelFamily(models.FirstOrDefault(m=>m.Id==model)??new(model,model,0,0,[]));prompt="";sidebarOpen=false;messages=[];streaming=streamingThoughts="";currentThoughtExpanded=false;currentRun=null;attachments.Clear();await InvokeModule("disconnect");
         var page=await Api.Get($"conversations/{c.Id}/messages?take={settings.MessagePageSize}",NexusJson.Default.MessagePage,ct);ct.ThrowIfCancellationRequested();messages=page.Items.ToList();hasMore=page.HasMore;hasNewer=false;Trim(false);await RefreshRuns();ct.ThrowIfCancellationRequested();currentRun=runs.FirstOrDefault(r=>r.ConversationId==c.Id&&IsActive(r));
         if(currentRun is not null)streamTask=WatchRun(currentRun.Id,ct);
         await RefreshMessages();await InvokeModule("bottom",true);
@@ -295,7 +311,7 @@ else
     private async Task Cancel()=>await Guard(async()=>{if(currentRun is not null)await Api.Action(HttpMethod.Post,$"runs/{currentRun.Id}/cancel");});
     private async Task WatchRun(string runId,CancellationToken ct)
     {
-        long sequence=0;var buffer=new System.Text.StringBuilder();var lastRender=Environment.TickCount64;
+        long sequence=0;var buffer=new System.Text.StringBuilder();var thoughtBuffer=new System.Text.StringBuilder();var lastRender=Environment.TickCount64;
         try
         {
             while(!ct.IsCancellationRequested&&currentRun?.Id==runId)
@@ -307,10 +323,12 @@ else
                         ct.ThrowIfCancellationRequested();if(currentRun?.Id!=runId)return;
                         sequence=item.Sequence;
                         if(item.Kind=="delta")buffer.Append(JsonSerializer.Deserialize(item.Json,NexusJson.Default.TextDelta)!.Text);
+                        if(item.Kind=="thought")thoughtBuffer.Append(JsonSerializer.Deserialize(item.Json,NexusJson.Default.ThoughtDelta)!.Text);
                         if(buffer.Length>settings.MaxBufferedBytes/2)buffer.Remove(0,buffer.Length-settings.MaxBufferedBytes/2);
+                        if(thoughtBuffer.Length>settings.MaxBufferedBytes/2)thoughtBuffer.Remove(0,thoughtBuffer.Length-settings.MaxBufferedBytes/2);
                         if(Environment.TickCount64-lastRender>=settings.RenderIntervalMs||item.Kind=="complete")
                         {
-                            streaming=buffer.ToString();currentRun=currentRun with{Status="running"};lastRender=Environment.TickCount64;
+                            streaming=buffer.ToString();streamingThoughts=thoughtBuffer.ToString();currentRun=currentRun with{Status="running"};lastRender=Environment.TickCount64;
                             await InvokeAsync(StateHasChanged);await InvokeModule("bottom",false);
                         }
                     }
@@ -332,19 +350,19 @@ else
         var run=await Api.Get($"runs/{runId}",NexusJson.Default.Run,ct);
         var page=await Api.Get($"conversations/{id}/messages?take={settings.MessagePageSize}",NexusJson.Default.MessagePage,ct);
         ct.ThrowIfCancellationRequested();if(active?.Id!=id||currentRun?.Id!=runId)return;
-        if(run.Error is not null)error=run.Error;currentRun=null;streaming="";messages=page.Items.ToList();hasMore=page.HasMore;hasNewer=false;Trim(false);
+        if(run.Error is not null)error=run.Error;currentRun=null;streaming=streamingThoughts="";currentThoughtExpanded=false;messages=page.Items.ToList();hasMore=page.HasMore;hasNewer=false;Trim(false);
         await RefreshMessages();await RefreshRuns();await ReloadConversations();await InvokeAsync(StateHasChanged);
     }
     private async Task RefreshRuns()=>runs=await Api.Get("runs",NexusJson.Default.RunArray,lifetime.Token);
     private async Task Poll(){try{while(!lifetime.IsCancellationRequested){await Task.Delay(5000,lifetime.Token);if(user is null)continue;try{await RefreshRuns();await InvokeAsync(StateHasChanged);}catch(HttpRequestException ex){if(ex.StatusCode==System.Net.HttpStatusCode.Unauthorized){ClearSession();await InvokeAsync(StateHasChanged);}}}}catch(OperationCanceledException){}}
     private async Task Rename()=>await Guard(async()=>{if(active is null)return;var title=await InvokeJs<string?>("prompt","שם השיחה",active.Title);if(string.IsNullOrWhiteSpace(title))return;await Api.Save(HttpMethod.Patch,$"conversations/{active.Id}",new RenameConversation(title,active.Pinned),NexusJson.Default.RenameConversation);active=active with{Title=title};await ReloadConversations();});
     private async Task Pin()=>await Guard(async()=>{if(active is null)return;await Api.Save(HttpMethod.Patch,$"conversations/{active.Id}",new RenameConversation(active.Title,!active.Pinned),NexusJson.Default.RenameConversation);active=active with{Pinned=!active.Pinned};await ReloadConversations();});
-    private async Task Archive()=>await Guard(async()=>{if(active is null)return;await Api.Action(HttpMethod.Delete,$"conversations/{active.Id}");await InvokeModule("disconnect");selection?.Cancel();active=null;currentRun=null;messages.Clear();streaming="";await ReloadConversations();});
+    private async Task Archive()=>await Guard(async()=>{if(active is null)return;await Api.Action(HttpMethod.Delete,$"conversations/{active.Id}");await InvokeModule("disconnect");selection?.Cancel();active=null;currentRun=null;messages.Clear();streaming=streamingThoughts="";await ReloadConversations();});
     private async Task Fork(Message message)=>await Guard(async()=>{var c=await Api.Send(HttpMethod.Post,$"conversations/{message.ConversationId}/fork",new ForkRequest(message.Id),NexusJson.Default.ForkRequest,NexusJson.Default.Conversation);await ReloadConversations();await SelectChat(c);});
     private async Task Edit(Message message)=>await Guard(async()=>{var c=await Api.Send(HttpMethod.Post,$"conversations/{message.ConversationId}/fork",new ForkRequest(message.Id,true),NexusJson.Default.ForkRequest,NexusJson.Default.Conversation);await ReloadConversations();await SelectChat(c);prompt=message.Content;});
     private async Task Copy(string text)=>await Guard(async()=>await InvokeJs("navigator.clipboard.writeText",text));
-    private void SetFields(){conversationPageSize=settings.ConversationPageSize;prefetchPages=settings.PrefetchPages;pageSize=settings.MessagePageSize;bufferTurns=settings.MaxBufferedTurns;bufferMb=settings.MaxBufferedBytes/1048576;overscan=settings.OverscanCount;renderMs=settings.RenderIntervalMs;contextTurns=settings.Generation.ContextMaxTurns;tokenBudget=settings.Generation.ContextTokenBudget;outputTokens=settings.Generation.MaxOutputTokens;temperature=settings.Generation.Temperature;systemInstruction=settings.Generation.SystemInstruction;advancedJson=settings.Generation.AdvancedJson;}
-    private GenerationSettings Generation()=>new(){ContextMaxTurns=contextTurns,ContextTokenBudget=tokenBudget,MaxOutputTokens=outputTokens,Temperature=temperature,SystemInstruction=systemInstruction,AdvancedJson=advancedJson};
+    private void SetFields(){conversationPageSize=settings.ConversationPageSize;prefetchPages=settings.PrefetchPages;pageSize=settings.MessagePageSize;bufferTurns=settings.MaxBufferedTurns;bufferMb=settings.MaxBufferedBytes/1048576;overscan=settings.OverscanCount;renderMs=settings.RenderIntervalMs;contextTurns=settings.Generation.ContextMaxTurns;tokenBudget=settings.Generation.ContextTokenBudget;outputTokens=settings.Generation.MaxOutputTokens;temperature=settings.Generation.Temperature;thinkingLevel=settings.Generation.ThinkingLevel;includeThoughts=settings.Generation.IncludeThoughts;systemInstruction=settings.Generation.SystemInstruction;advancedJson=settings.Generation.AdvancedJson;}
+    private GenerationSettings Generation()=>new(){ContextMaxTurns=contextTurns,ContextTokenBudget=tokenBudget,MaxOutputTokens=outputTokens,Temperature=temperature,ThinkingLevel=thinkingLevel,IncludeThoughts=includeThoughts,SystemInstruction=systemInstruction,AdvancedJson=advancedJson};
     private async Task SaveSettings()=>await Guard(async()=>{var updated=settings with{ConversationPageSize=conversationPageSize,PrefetchPages=prefetchPages,MessagePageSize=pageSize,MaxBufferedTurns=bufferTurns,MaxBufferedBytes=bufferMb*1048576,OverscanCount=overscan,RenderIntervalMs=renderMs,Generation=Generation()};await Api.Save(HttpMethod.Put,"settings",updated,NexusJson.Default.WorkspaceSettings);settings=updated;setupNeeded=true;Trim(false);await RefreshMessages();panel=null;});
     private async Task ToggleTheme()=>await Guard(async()=>{settings=settings with{Theme=settings.Theme=="dark"?"light":"dark"};await Api.Save(HttpMethod.Put,"settings",settings,NexusJson.Default.WorkspaceSettings);});
     private async Task AddPlugin()=>await Guard(async()=>{var config=new System.Text.Json.Nodes.JsonObject{["text"]=pluginText,["find"]=pluginFind}.ToJsonString();await Api.Save(HttpMethod.Put,"plugins",new PluginDefinition(Guid.NewGuid().ToString("N"),pluginName,pluginKind,"1",pluginExecution,true,config),NexusJson.Default.PluginDefinition);plugins=await Api.Get("plugins",NexusJson.Default.PluginList);pluginName=pluginText=pluginFind="";});
@@ -357,6 +375,35 @@ else
     private async Task LoadDebug()=>await Guard(async()=>{if(inspectedRun.Length==0)return;var after=debugEvents.LastOrDefault()?.Sequence??0;var page=await Api.Get($"runs/{inspectedRun}/events?format=json&after={after}",NexusJson.Default.RunEventPage);debugEvents.AddRange(page.Items);debugMore=page.HasMore;long bytes=debugEvents.Sum(e=>(long)e.Json.Length*2);while(debugEvents.Count>1&&(debugEvents.Count>200||bytes>settings.MaxBufferedBytes)){bytes-=debugEvents[0].Json.Length*2L;debugEvents.RemoveAt(0);}});
     private string Usage(string name){if(debugMetrics is not null){using var metrics=JsonDocument.Parse(debugMetrics.UsageJson);if(metrics.RootElement.TryGetProperty(name,out var number))return number.ToString();}foreach(var ev in debugEvents.AsEnumerable().Reverse().Where(e=>e.Kind=="provider")){using var d=JsonDocument.Parse(ev.Json);if(d.RootElement.TryGetProperty("usageMetadata",out var u)&&u.TryGetProperty(name,out var n))return n.ToString();}return "לא דווח";}
     private static string Pretty(string json){try{using var doc=JsonDocument.Parse(json);using var memory=new MemoryStream();using(var writer=new Utf8JsonWriter(memory,new(){Indented=true})){doc.RootElement.WriteTo(writer);}return System.Text.Encoding.UTF8.GetString(memory.ToArray());}catch(JsonException){return json;}}
+    private static bool IsSpecializedModel(string id)=>id.Contains("image",StringComparison.OrdinalIgnoreCase)||id.Contains("tts",StringComparison.OrdinalIgnoreCase)||id.Contains("live",StringComparison.OrdinalIgnoreCase)||id.Contains("audio",StringComparison.OrdinalIgnoreCase)||id.Contains("transcribe",StringComparison.OrdinalIgnoreCase);
+    private static string ModelFamily(ModelInfo item)
+    {
+        var id=item.Id.ToLowerInvariant();
+        if(id.Contains("flash-lite"))return "Gemini Flash-Lite";
+        if(id.Contains("pro"))return "Gemini Pro";
+        if(id.Contains("flash"))return "Gemini Flash";
+        return item.Name.Split(' ',StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()??"מודלים נוספים";
+    }
+    private static string ModelVersionLabel(ModelInfo item)
+    {
+        var segments=item.Id.Split('-',StringSplitOptions.RemoveEmptyEntries);var version=segments.FirstOrDefault(x=>x.Length>0&&char.IsDigit(x[0]));
+        var stage=item.Id.Contains("preview",StringComparison.OrdinalIgnoreCase)?"Preview":item.Id.Contains("exp",StringComparison.OrdinalIgnoreCase)?"Experimental":item.Id.Contains("latest",StringComparison.OrdinalIgnoreCase)?"Latest":"Stable";
+        var release=string.Join('-',segments.SkipWhile(x=>x!=version).Skip(1).Where(x=>!x.Equals("flash",StringComparison.OrdinalIgnoreCase)&&!x.Equals("lite",StringComparison.OrdinalIgnoreCase)&&!x.Equals("pro",StringComparison.OrdinalIgnoreCase)&&!x.Equals("preview",StringComparison.OrdinalIgnoreCase)&&!x.Equals("exp",StringComparison.OrdinalIgnoreCase)&&!x.Equals("latest",StringComparison.OrdinalIgnoreCase)));
+        return version is null?item.Name:$"{version} · {stage}{(release.Length>0?$" · {release}":"")}";
+    }
+    private void ModelFamilyChanged(ChangeEventArgs e){modelFamily=e.Value?.ToString()??modelFamily;var first=FamilyModels.FirstOrDefault();if(first is not null)model=first.Id;}
+    private void ModelChanged(ChangeEventArgs e){model=e.Value?.ToString()??model;modelFamily=ModelFamily(models.FirstOrDefault(m=>m.Id==model)??new(model,model,0,0,[]));}
+    private void ToggleThought(string id){if(!expandedThoughts.Add(id))expandedThoughts.Remove(id);}
+    private static string ThoughtText(string partsJson)
+    {
+        try
+        {
+            using var document=JsonDocument.Parse(partsJson);var text=new System.Text.StringBuilder();
+            foreach(var part in document.RootElement.EnumerateArray())if(part.TryGetProperty("thought",out var thought)&&thought.ValueKind==JsonValueKind.True&&part.TryGetProperty("text",out var value)&&value.GetString() is {Length:>0} content)text.Append(content);
+            return text.ToString();
+        }
+        catch(JsonException){return "";}
+    }
     private async ValueTask InvokeJs(string identifier,params object?[] arguments){try{await JS.InvokeVoidAsync(identifier,arguments);}catch(JSDisconnectedException){}}
     private async ValueTask<T?> InvokeJs<T>(string identifier,params object?[] arguments){try{return await JS.InvokeAsync<T>(identifier,arguments);}catch(JSDisconnectedException){return default;}}
     private async ValueTask InvokeModule(string identifier,params object?[] arguments){if(module is null)return;try{await module.InvokeVoidAsync(identifier,arguments);}catch(JSDisconnectedException){}}

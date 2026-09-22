@@ -73,8 +73,8 @@ public sealed class SubmitRunEndpoint(WorkspaceStore store,RunCoordinator coordi
     {
         var r=await Body(NexusJson.Default.SubmitRun,ct);GeminiProvider.ValidateModel(r.Model);
         if(string.IsNullOrWhiteSpace(r.Prompt)||r.Prompt.Length>options.MaxPromptChars||r.IdempotencyKey.Length is <16 or >128||r.Settings is null)throw new WorkspaceException(400,"פרומפט או מזהה בקשה אינם תקינים");
-        var s=r.Settings;
-        if(s.ContextMaxTurns is <0 or >500||s.ContextTokenBudget is <1 or >2000000||s.MaxOutputTokens is <1 or >1000000||!double.IsFinite(s.Temperature)||s.Temperature is <0 or >2||s.AdvancedJson.Length>131072||s.SystemInstruction.Length>100000)throw new WorkspaceException(400,"הגדרות יצירה אינן תקינות");
+        var s=r.Settings;var thinkingLevel=string.IsNullOrWhiteSpace(s.ThinkingLevel)?"medium":s.ThinkingLevel.ToLowerInvariant();s=s with{ThinkingLevel=thinkingLevel};
+        if(s.ContextMaxTurns is <0 or >500||s.ContextTokenBudget is <1 or >2000000||s.MaxOutputTokens is <1 or >1000000||!double.IsFinite(s.Temperature)||s.Temperature is <0 or >2||s.ThinkingLevel is not ("auto" or "minimal" or "low" or "medium" or "high")||s.AdvancedJson.Length>131072||s.SystemInstruction.Length>100000)throw new WorkspaceException(400,"הגדרות יצירה אינן תקינות");
         using var advanced=JsonDocument.Parse(s.AdvancedJson);if(advanced.RootElement.ValueKind!=JsonValueKind.Object)throw new WorkspaceException(400,"הגדרות מתקדמות חייבות להיות אובייקט JSON");
         if(advanced.RootElement.TryGetProperty("contents",out _))throw new WorkspaceException(400,"היסטוריית השיחה נקבעת על ידי השרת");
         long bytes=0;var attachments=r.Attachments??[];
@@ -117,7 +117,7 @@ public sealed class EventsEndpoint(WorkspaceStore store):NexusEndpoint
         while(!ct.IsCancellationRequested)
         {
             var items=await store.Events(owner,id,after,100,ct);
-            foreach(var item in items){if(QueryText("view")=="text"&&item.Kind is not ("delta" or "complete")){after=item.Sequence;continue;}await HttpContext.Response.WriteAsync($"id: {item.Sequence}\nevent: {item.Kind}\ndata: {JsonSerializer.Serialize(item,NexusJson.Default.RunEvent)}\n\n",ct);after=item.Sequence;}
+            foreach(var item in items){if(QueryText("view")=="text"&&item.Kind is not ("delta" or "thought" or "complete")){after=item.Sequence;continue;}await HttpContext.Response.WriteAsync($"id: {item.Sequence}\nevent: {item.Kind}\ndata: {JsonSerializer.Serialize(item,NexusJson.Default.RunEvent)}\n\n",ct);after=item.Sequence;}
             if(items.Length>0){await HttpContext.Response.Body.FlushAsync(ct);idle=0;}
             var run=await store.FindRun(owner,id,ct);
             if(run is null||run.Status is not ("queued" or "running")&&(after>=run.LastSequence||items.Length==0))

@@ -35,6 +35,9 @@ class Gemini(http.server.BaseHTTPRequestHandler):
                 event={'candidates':[{'index':0,'content':{'role':'model','parts':[{'functionCall':{'id':'fixture-call','name':'nexus_calculate','args':{'expression':'(2+3)*4'}}}]}}]}
                 self.wfile.write(('data: '+json.dumps(event)+'\n\n').encode())
                 event={'candidates':[{'index':0,'finishReason':'STOP'}]};self.wfile.write(('data: '+json.dumps(event)+'\n\n').encode());self.wfile.flush();return
+            if prompt in ('THINK','browser-test'):
+                event={'candidates':[{'index':0,'content':{'role':'model','parts':[{'text':'בודק אפשרויות…','thought':True}]}}]}
+                self.wfile.write(('data: '+json.dumps(event)+'\n\n').encode());self.wfile.flush()
             for text in ['שלום ', 'מהמודל ', 'המקבילי']:
                 event={'candidates':[{'index':0,'content':{'role':'model','parts':[{'text':text}]}}]}
                 self.wfile.write(('data: '+json.dumps(event)+'\n\n').encode());self.wfile.flush();time.sleep(1 if 'SLOW' in prompt else .03)
@@ -114,6 +117,10 @@ class Contracts(unittest.TestCase):
     def test_03_ownership(self):
         c=self.conversation();_,r=self.submit(c);self.wait(r)
         for path in [f"/api/conversations/{c['id']}/messages",f"/api/runs/{r['id']}",f"/api/runs/{r['id']}/events?format=json",f"/api/runs/{r['id']}/metrics"]:self.assertEqual(self.other.call(path)[0],404,path)
+    def test_03a_thought_summary_stream_and_storage(self):
+        c=self.conversation();_,r=self.submit(c,'THINK');self.assertEqual(self.wait(r)['status'],'completed')
+        _,events=self.admin.call(f"/api/runs/{r['id']}/events?format=json");thoughts=[json.loads(e['json'])['text'] for e in events['items'] if e['kind']=='thought'];self.assertTrue(any('בודק אפשרויות' in text for text in thoughts))
+        _,page=self.admin.call(f"/api/conversations/{c['id']}/messages");model=page['items'][-1];self.assertIn('"thought":true',model['partsJson']);self.assertNotIn('בודק אפשרויות',model['content'])
     def test_03b_file_upload_reference_and_ownership(self):
         status,file=self.admin.upload();self.assertEqual(status,201,file);self.assertEqual(file['sizeBytes'],11);self.assertEqual(file['data'],'')
         self.assertEqual(self.admin.call('/api/files')[1][0]['fileId'],file['fileId']);self.assertEqual(self.other.call('/api/files')[1],[])

@@ -29,6 +29,8 @@ public sealed record GenerationSettings
     public int ContextTokenBudget { get; init; } = 1000000;
     public int MaxOutputTokens { get; init; } = 8192;
     public double Temperature { get; init; } = 1;
+    public string ThinkingLevel { get; init; } = "medium";
+    public bool IncludeThoughts { get; init; } = true;
     public string SystemInstruction { get; init; } = "";
     public string AdvancedJson { get; init; } = "{}";
 }
@@ -70,6 +72,7 @@ public sealed record TokenCountResult(int TotalTokens, bool Estimated, string? E
 public sealed record HealthStatus(string Status);
 public sealed record StoredRunRequest(SubmitRun Request, string ContentsJson);
 public sealed record TextDelta(string Text);
+public sealed record ThoughtDelta(string Text);
 public sealed record RunMetrics(string UsageJson, string? ModelVersion, string? FinishReason, long ElapsedMs, long? FirstTokenMs, long QueueMs);
 public sealed record RunCompletion(string Status, string? Error);
 public sealed record UploadLimit(long MaxAttachmentBytes,int MaxPromptChars,int MaxAttachments = 10,long MaxPdfBytes = 52428800);
@@ -120,6 +123,7 @@ public sealed record SimilarityResult(float Value,string Backend,bool OpenClAvai
 [JsonSerializable(typeof(TokenCountResult))]
 [JsonSerializable(typeof(HealthStatus))]
 [JsonSerializable(typeof(TextDelta))]
+[JsonSerializable(typeof(ThoughtDelta))]
 [JsonSerializable(typeof(RunCompletion))]
 [JsonSerializable(typeof(RunMetrics))]
 [JsonSerializable(typeof(UploadLimit))]

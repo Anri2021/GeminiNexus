@@ -32,7 +32,12 @@ Check(rejected,"Null authentication field rejected");
 var trace=TraceRedactor.Redact("{\"nested\":{\"authorization\":\"secret\"},\"text\":\"fixture-key\"}","fixture-key");
 Check(!trace.Contains("secret")&&!trace.Contains("fixture-key"),"Trace secret redaction");
 var parsed=GeminiProvider.Parse("{\"candidates\":[{\"index\":0,\"content\":{\"parts\":[{\"text\":\"private\",\"thought\":true},{\"text\":\"visible\",\"thoughtSignature\":\"signature\"}]},\"finishReason\":\"STOP\"},{\"index\":1,\"content\":{\"parts\":[{\"text\":\"alternative\"}]}}],\"unknown\":true}");
-Check(parsed.Text=="visible"&&parsed.PartsJson.Contains("signature")&&parsed.RawJson.Contains("alternative"),"All raw candidates retained; thought parts excluded from visible text");
+Check(parsed.Text=="visible"&&parsed.ThoughtText=="private"&&parsed.PartsJson.Contains("signature")&&parsed.RawJson.Contains("alternative"),"Thought summaries are separated while all provider parts are retained");
+var thinking=new System.Text.Json.Nodes.JsonObject();GeminiProvider.ApplyThinkingConfig(thinking,"gemini-3.8-flash",new(){ThinkingLevel="high",IncludeThoughts=true});
+Check(thinking.ToJsonString().Contains("thinkingLevel\":\"high")&&thinking.ToJsonString().Contains("includeThoughts\":true"),"Gemini 3 thinking level mapping");
+thinking=new();GeminiProvider.ApplyThinkingConfig(thinking,"gemini-2.5-flash",new(){ThinkingLevel="low"});Check(thinking.ToJsonString().Contains("thinkingBudget\":1024"),"Gemini 2.5 thinking budget mapping");
+thinking=new();GeminiProvider.ApplyThinkingConfig(thinking,"gemini-2.5-pro",new(){ThinkingLevel="high"});Check(thinking.ToJsonString().Contains("thinkingBudget\":32768"),"Gemini 2.5 Pro high thinking budget mapping");
+thinking=new();GeminiProvider.ApplyThinkingConfig(thinking,"gemini-3.8-flash",new(){ThinkingLevel="minimal"});Check(thinking.ToJsonString().Contains("thinkingLevel\":\"low"),"Unsupported Gemini 3 minimal level is normalized safely");
 var left=new float[1024];var right=new float[1024];Array.Fill(left,2);Array.Fill(right,3);ComputeKernels.Dot(left,right,"simd");
 var allocated=GC.GetAllocatedBytesForCurrentThread();for(var i=0;i<1000;i++)ComputeKernels.Dot(left,right,"simd");
 Check(GC.GetAllocatedBytesForCurrentThread()==allocated&&ComputeKernels.Dot(left,right,"simd")==6144,"SIMD hot path is zero-allocation");
@@ -49,6 +54,7 @@ await using(var renderer=new HtmlRenderer(services,services.GetRequiredService<I
     {
         var output=await renderer.RenderComponentAsync<GeminiNexus.UI.Pages.Workspace>();
         var markup=output.ToHtmlString();Check(markup.Contains("nexus-app")&&markup.Contains("composer")&&markup.Contains("sidebar"),"Real workspace Razor renders");
+        Check(markup.Contains("model-family")&&markup.Contains("model-version")&&markup.Contains("run-options"),"Model family, version, and thinking controls render");
         if(args.Length>0)
         {
             var directory=Path.Combine(args[0],"artifacts","checks");Directory.CreateDirectory(directory);

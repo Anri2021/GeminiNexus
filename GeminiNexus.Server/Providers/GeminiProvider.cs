@@ -13,7 +13,7 @@ using Polly.Retry;
 
 namespace GeminiNexus.Server.Providers;
 
-public sealed record ProviderChunk(string RawJson, string Text, string PartsJson, string? FinishReason);
+public sealed record ProviderChunk(string RawJson, string Text, string ThoughtText, string PartsJson, string? FinishReason);
 public sealed record ProviderFile(string Name,string Uri,string MimeType,long SizeBytes,string State,string? ExpirationTime);
 public interface IChatProvider
 {
@@ -93,6 +93,7 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
         var generation=config["generationConfig"] as JsonObject??new JsonObject();
         config["generationConfig"]=generation.Parent is null?generation:generation.DeepClone();generation=config["generationConfig"]!.AsObject();
         generation["temperature"]=settings.Temperature;generation["maxOutputTokens"]=settings.MaxOutputTokens;
+        ApplyThinkingConfig(generation,stored.Request.Model,settings);
         // Exact input accounting includes tools, system instructions and all multimodal parts.
         while(true)
         {
@@ -107,6 +108,22 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
             contents.RemoveAt(0);while(contents.Count>1&&contents[0]?["role"]?.GetValue<string>()!="user")contents.RemoveAt(0);
         }
         return config.ToJsonString();
+    }
+    internal static void ApplyThinkingConfig(JsonObject generation,string model,GenerationSettings settings)
+    {
+        if(!model.StartsWith("gemini-3",StringComparison.OrdinalIgnoreCase)&&!model.StartsWith("gemini-2.5",StringComparison.OrdinalIgnoreCase)){generation.Remove("thinkingConfig");return;}
+        var thinking=new JsonObject{{"includeThoughts",settings.IncludeThoughts}};var level=(settings.ThinkingLevel??"medium").ToLowerInvariant();
+        if(model.StartsWith("gemini-3",StringComparison.OrdinalIgnoreCase))
+        {
+            if(level=="minimal"&&(model.StartsWith("gemini-3.8",StringComparison.OrdinalIgnoreCase)||model.StartsWith("gemini-3.7",StringComparison.OrdinalIgnoreCase)||model.StartsWith("gemini-3.1-pro",StringComparison.OrdinalIgnoreCase)))level="low";
+            if(level!="auto")thinking["thinkingLevel"]=level;
+        }
+        else
+        {
+            var pro=model.Contains("pro",StringComparison.OrdinalIgnoreCase);
+            thinking["thinkingBudget"]=level switch{"minimal"=>pro?128:0,"low"=>1024,"medium"=>8192,"high"=>pro?32768:24576,_=>-1};
+        }
+        generation["thinkingConfig"]=thinking;
     }
     public async IAsyncEnumerable<ProviderChunk> Stream(string model,string payload,[EnumeratorCancellation] CancellationToken ct)
     {
@@ -125,7 +142,7 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
     }
     internal static ProviderChunk Parse(string raw)
     {
-        using var doc=JsonDocument.Parse(raw);var text=new StringBuilder();var parts=new JsonArray();string? finish=null;
+        using var doc=JsonDocument.Parse(raw);var text=new StringBuilder();var thoughts=new StringBuilder();var parts=new JsonArray();string? finish=null;
         if(doc.RootElement.TryGetProperty("error",out var error))throw new WorkspaceException(502,error.GetRawText());
         if(doc.RootElement.TryGetProperty("candidates",out var candidates))
         {
@@ -138,13 +155,16 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
                 foreach(var part in pp.EnumerateArray())
                 {
                     parts.Add(JsonNode.Parse(part.GetRawText()));
-                    if(part.TryGetProperty("text",out var t)&&(!part.TryGetProperty("thought",out var thought)||!thought.GetBoolean()))text.Append(t.GetString());
+                    if(part.TryGetProperty("text",out var t))
+                    {
+                        if(part.TryGetProperty("thought",out var thought)&&thought.GetBoolean())thoughts.Append(t.GetString());else text.Append(t.GetString());
+                    }
                 }
                 break;
             }
         }
         if(doc.RootElement.TryGetProperty("promptFeedback",out var feedback)&&feedback.TryGetProperty("blockReason",out var block))finish="BLOCKED:"+block.GetString();
-        return new(raw,text.ToString(),parts.ToJsonString(),finish);
+        return new(raw,text.ToString(),thoughts.ToString(),parts.ToJsonString(),finish);
     }
     public async Task<ModelCatalog> Models(CancellationToken ct)
     {

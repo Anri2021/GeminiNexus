@@ -81,13 +81,14 @@ else
             @if(uploadingFiles){<div class="muted" role="status">@uploadStatus</div>}
             <textarea @bind="prompt" @bind:event="oninput" @onkeydown="KeyDown" placeholder="אפשר לשאול הכול…" aria-label="הודעה חדשה" rows="2"></textarea>
             <div class="composer-bottom"><div class="composer-tools"><label class="attach-button" title="הוספת קובץ">＋<InputFile OnChange="Attach" multiple /></label>
+            <select class="model-kind" value="@modelKind" @onchange="ModelKindChanged" aria-label="סוג יכולת המודל" title="סוג יכולת המודל">@foreach(var kind in ModelKinds){<option value="@kind">@kind</option>}</select>
             <select class="model-family" value="@modelFamily" @onchange="ModelFamilyChanged" aria-label="משפחת מודל" title="משפחת מודל">@foreach(var family in ModelFamilies){<option value="@family">@family</option>}</select>
-            <select class="model-version" value="@model" @onchange="ModelChanged" aria-label="גרסת מודל" title="גרסת מודל">@foreach(var m in FamilyModels){<option value="@m.Id" title="@m.Name">@ModelVersionLabel(m)</option>}@if(!models.Any(m=>m.Id==model)){<option value="@model">@model</option>}</select>
+            <select class="model-version" value="@model" @onchange="ModelChanged" aria-label="מודל וגרסה" title="מודל וגרסה">@foreach(var m in FamilyModels){<option value="@m.Id" title="@m.Id">@ModelCatalogGrouping.ModelLabel(m)</option>}@if(!models.Any(m=>m.Id==model)){<option value="@model">@model</option>}</select>
             <details class="run-options"><summary title="אפשרויות חשיבה">✦ @ThinkingLabel</summary><div class="run-menu"><label>רמת חשיבה<select @bind="thinkingLevel"><option value="auto">אוטומטית</option><option value="minimal">מינימלית</option><option value="low">נמוכה / מהירה</option><option value="medium">בינונית / מאוזנת</option><option value="high">גבוהה / מעמיקה</option></select></label><label class="check-row"><input type="checkbox" @bind="includeThoughts" /> הצגת תקציר חשיבה</label></div></details>
             <button class="icon" @onclick='()=>panel="settings"' title="הגדרות יצירה מתקדמות">☷</button></div>
             @if(currentRun is not null&&IsActive(currentRun)){<button class="send-button stop" @onclick="Cancel" title="עצירת העיבוד">■</button>}
-            else{<button class="send-button" @onclick="Send" disabled="@(busy||uploadingFiles||string.IsNullOrWhiteSpace(prompt))" title="שליחה">↑</button>}</div>
-        </div><div class="composer-caption">תוכן שנוצר ב־AI עשוי להיות שגוי. כדאי לבדוק פרטים חשובים. <span>@(messages.Count) הודעות בבאפר</span></div></div>
+            else{<button class="send-button" @onclick="Send" disabled="@(busy||uploadingFiles||string.IsNullOrWhiteSpace(prompt)||!CurrentModelSupportsChat)" title="@(CurrentModelSupportsChat?"שליחה":"המודל אינו תומך בשיחת generateContent")">↑</button>}</div>
+        </div><div class="composer-caption">@if(!CurrentModelSupportsChat){<strong>המודל מוצג כחלק מהקטלוג המלא, אך אינו תומך בשיחה רגילה. אפשר להשתמש בו בחלונית יכולות Gemini.</strong>}else{<text>תוכן שנוצר ב־AI עשוי להיות שגוי. כדאי לבדוק פרטים חשובים.</text>} <span>@(messages.Count) הודעות בבאפר</span></div></div>
     </main>
     @if(panel is not null)
     {
@@ -192,7 +193,7 @@ else
     private RunMetrics? debugMetrics;
     private string accountName="",accountEmail="",accountPassword="",oldPassword="",resetEmail="",resetToken="",resetNewPassword="";
     private UserInfo? user;private bool loading=true,busy,uploadingFiles,sidebarOpen,hasMore,hasNewer,loadingHistory,loadingConversations,resetMode,includeThoughts=true,currentThoughtExpanded;private string? error,panel,conversationCursor,resetNotice;
-    private string loginName="admin",password="",search="",prompt="",model="gemini-3.8-flash",modelFamily="Gemini Flash",thinkingLevel="medium",streaming="",streamingThoughts="";
+    private string loginName="admin",password="",search="",prompt="",model="gemini-3.8-flash",modelKind=ModelCatalogGrouping.General,modelFamily="Gemini Flash",thinkingLevel="medium",streaming="",streamingThoughts="";
     private List<Conversation> conversations=[];private List<Message> messages=[];private Run[] runs=[];private ModelInfo[] models=[];private Conversation? active;private Run? currentRun;
     private PluginList plugins=new([]);private ProviderCapabilityCatalog providerCapabilities=new([]);private ProviderOperationList providerOperations=new([]);private List<Attachment> attachments=[];private WorkspaceSettings settings=new();private UploadLimit limits=new(104857600,100000,10,52428800);
     private int conversationPageSize=30,prefetchPages=1,pageSize=30,bufferTurns=60,bufferMb=4,overscan=4,renderMs=80,contextTurns=20,tokenBudget=1000000,outputTokens=8192;private double temperature=1;
@@ -203,15 +204,17 @@ else
     private string PanelTitle=>panel switch{"settings"=>"העדפות ובאפרינג","plugins"=>"התוספים שלך","provider"=>"יכולות Gemini","lab"=>"מעבדת API","account"=>"חשבון ואבטחה",_=>"בדיקת ריצה"};
     private static bool IsActive(Run r)=>r.Status is "queued" or "running";
     private static string StatusLabel(string s)=>s switch{"queued"=>"בתור","running"=>"מעבד","completed"=>"הושלם","cancelled"=>"בוטל","failed"=>"נכשל","interrupted"=>"נקטע","blocked"=>"נחסם","truncated"=>"מגבלת פלט","requires_action"=>"נדרשת פעולת כלי",_=>s};
-    private IEnumerable<string> ModelFamilies=>models.Select(ModelFamily).Append(modelFamily).Distinct(StringComparer.Ordinal).OrderBy(x=>x);
-    private IEnumerable<ModelInfo> FamilyModels=>models.Where(m=>ModelFamily(m)==modelFamily).OrderByDescending(m=>m.Id);
+    private IEnumerable<string> ModelKinds=>models.Select(ModelCatalogGrouping.Category).Append(modelKind).Distinct(StringComparer.Ordinal).OrderBy(ModelCatalogGrouping.CategoryOrder).ThenBy(x=>x,StringComparer.Ordinal);
+    private IEnumerable<string> ModelFamilies=>models.Where(m=>ModelCatalogGrouping.Category(m)==modelKind).Select(ModelCatalogGrouping.Family).Append(modelFamily).Distinct(StringComparer.Ordinal).OrderBy(x=>x,StringComparer.Ordinal);
+    private IEnumerable<ModelInfo> FamilyModels=>models.Where(m=>ModelCatalogGrouping.Category(m)==modelKind&&ModelCatalogGrouping.Family(m)==modelFamily).OrderByDescending(m=>m.Id,StringComparer.Ordinal);
+    private bool CurrentModelSupportsChat=>models.FirstOrDefault(m=>m.Id==model) is not { } selected||ModelCatalogGrouping.SupportsChat(selected);
     private string ThinkingLabel=>thinkingLevel switch{"auto"=>"אוטומטי","minimal"=>"מינימלי","low"=>"מהיר","medium"=>"מאוזן","high"=>"מעמיק",_=>thinkingLevel};
     protected override async Task OnInitializedAsync()
     {var query=Navigation.ToAbsoluteUri(Navigation.Uri).Query.TrimStart('?').Split('&',StringSplitOptions.RemoveEmptyEntries);foreach(var item in query){var pair=item.Split('=',2);if(pair.Length==2&&pair[0]=="resetToken"){resetToken=Uri.UnescapeDataString(pair[1].Replace('+',' '));resetMode=true;break;}}try{user=await Api.Get("auth/me",NexusJson.Default.UserInfo,lifetime.Token);await InitializeWorkspace();}catch(HttpRequestException ex)when(ex.StatusCode==System.Net.HttpStatusCode.Unauthorized){}catch(Exception ex){error=ex.Message;}finally{loading=false;}}
     private async Task InitializeWorkspace()
     {
         settings=await Api.Get("settings",NexusJson.Default.WorkspaceSettings,lifetime.Token);SetFields();plugins=await Api.Get("plugins",NexusJson.Default.PluginList,lifetime.Token);limits=await Api.Get("limits",NexusJson.Default.UploadLimit,lifetime.Token);
-        try{models=(await Api.Get("models",NexusJson.Default.ModelCatalog,lifetime.Token)).Items.Where(m=>m.Methods.Contains("generateContent")&&!IsSpecializedModel(m.Id)).ToArray();if(models.Length>0&&!models.Any(m=>m.Id==model))model=models[0].Id;modelFamily=ModelFamily(models.FirstOrDefault(m=>m.Id==model)??new(model,model,0,0,[]));if(tokenBudget==24000&&models.FirstOrDefault(m=>m.Id==model) is {InputTokenLimit:>24000} selected)tokenBudget=Math.Min(2000000,selected.InputTokenLimit);}catch(Exception ex){error=ex.Message;}
+        try{models=(await Api.Get("models",NexusJson.Default.ModelCatalog,lifetime.Token)).Items;if(models.Length>0&&!models.Any(m=>m.Id==model))model=models.FirstOrDefault(ModelCatalogGrouping.SupportsChat)?.Id??models[0].Id;SetModelGrouping();if(tokenBudget==24000&&models.FirstOrDefault(m=>m.Id==model) is {InputTokenLimit:>24000} selected)tokenBudget=Math.Min(2000000,selected.InputTokenLimit);}catch(Exception ex){error=ex.Message;}
         await ReloadConversations();await RefreshRuns();setupNeeded=true;polling??=Poll();
     }
     protected override async Task OnAfterRenderAsync(bool firstRender)
@@ -239,7 +242,7 @@ else
     private async Task NewChat()=>await Guard(async()=>{var c=await Api.Send(HttpMethod.Post,"conversations",new CreateConversation("שיחה חדשה",model),NexusJson.Default.CreateConversation,NexusJson.Default.Conversation);await ReloadConversations();await SelectChat(c);});
     private async Task SelectChat(Conversation c)=>await Guard(async()=>
     {
-        selection?.Cancel();selection?.Dispose();selection=new();var ct=selection.Token;active=c;model=c.Model;modelFamily=ModelFamily(models.FirstOrDefault(m=>m.Id==model)??new(model,model,0,0,[]));prompt="";sidebarOpen=false;messages=[];streaming=streamingThoughts="";currentThoughtExpanded=false;currentRun=null;attachments.Clear();await InvokeModule("disconnect");
+        selection?.Cancel();selection?.Dispose();selection=new();var ct=selection.Token;active=c;model=c.Model;SetModelGrouping();prompt="";sidebarOpen=false;messages=[];streaming=streamingThoughts="";currentThoughtExpanded=false;currentRun=null;attachments.Clear();await InvokeModule("disconnect");
         var page=await Api.Get($"conversations/{c.Id}/messages?take={settings.MessagePageSize}",NexusJson.Default.MessagePage,ct);ct.ThrowIfCancellationRequested();messages=page.Items.ToList();hasMore=page.HasMore;hasNewer=false;Trim(false);await RefreshRuns();ct.ThrowIfCancellationRequested();currentRun=runs.FirstOrDefault(r=>r.ConversationId==c.Id&&IsActive(r));
         if(currentRun is not null)streamTask=WatchRun(currentRun.Id,ct);
         await RefreshMessages();await InvokeModule("bottom",true);
@@ -375,24 +378,10 @@ else
     private async Task LoadDebug()=>await Guard(async()=>{if(inspectedRun.Length==0)return;var after=debugEvents.LastOrDefault()?.Sequence??0;var page=await Api.Get($"runs/{inspectedRun}/events?format=json&after={after}",NexusJson.Default.RunEventPage);debugEvents.AddRange(page.Items);debugMore=page.HasMore;long bytes=debugEvents.Sum(e=>(long)e.Json.Length*2);while(debugEvents.Count>1&&(debugEvents.Count>200||bytes>settings.MaxBufferedBytes)){bytes-=debugEvents[0].Json.Length*2L;debugEvents.RemoveAt(0);}});
     private string Usage(string name){if(debugMetrics is not null){using var metrics=JsonDocument.Parse(debugMetrics.UsageJson);if(metrics.RootElement.TryGetProperty(name,out var number))return number.ToString();}foreach(var ev in debugEvents.AsEnumerable().Reverse().Where(e=>e.Kind=="provider")){using var d=JsonDocument.Parse(ev.Json);if(d.RootElement.TryGetProperty("usageMetadata",out var u)&&u.TryGetProperty(name,out var n))return n.ToString();}return "לא דווח";}
     private static string Pretty(string json){try{using var doc=JsonDocument.Parse(json);using var memory=new MemoryStream();using(var writer=new Utf8JsonWriter(memory,new(){Indented=true})){doc.RootElement.WriteTo(writer);}return System.Text.Encoding.UTF8.GetString(memory.ToArray());}catch(JsonException){return json;}}
-    private static bool IsSpecializedModel(string id)=>id.Contains("image",StringComparison.OrdinalIgnoreCase)||id.Contains("tts",StringComparison.OrdinalIgnoreCase)||id.Contains("live",StringComparison.OrdinalIgnoreCase)||id.Contains("audio",StringComparison.OrdinalIgnoreCase)||id.Contains("transcribe",StringComparison.OrdinalIgnoreCase);
-    private static string ModelFamily(ModelInfo item)
-    {
-        var id=item.Id.ToLowerInvariant();
-        if(id.Contains("flash-lite"))return "Gemini Flash-Lite";
-        if(id.Contains("pro"))return "Gemini Pro";
-        if(id.Contains("flash"))return "Gemini Flash";
-        return item.Name.Split(' ',StringSplitOptions.RemoveEmptyEntries).FirstOrDefault()??"מודלים נוספים";
-    }
-    private static string ModelVersionLabel(ModelInfo item)
-    {
-        var segments=item.Id.Split('-',StringSplitOptions.RemoveEmptyEntries);var version=segments.FirstOrDefault(x=>x.Length>0&&char.IsDigit(x[0]));
-        var stage=item.Id.Contains("preview",StringComparison.OrdinalIgnoreCase)?"Preview":item.Id.Contains("exp",StringComparison.OrdinalIgnoreCase)?"Experimental":item.Id.Contains("latest",StringComparison.OrdinalIgnoreCase)?"Latest":"Stable";
-        var release=string.Join('-',segments.SkipWhile(x=>x!=version).Skip(1).Where(x=>!x.Equals("flash",StringComparison.OrdinalIgnoreCase)&&!x.Equals("lite",StringComparison.OrdinalIgnoreCase)&&!x.Equals("pro",StringComparison.OrdinalIgnoreCase)&&!x.Equals("preview",StringComparison.OrdinalIgnoreCase)&&!x.Equals("exp",StringComparison.OrdinalIgnoreCase)&&!x.Equals("latest",StringComparison.OrdinalIgnoreCase)));
-        return version is null?item.Name:$"{version} · {stage}{(release.Length>0?$" · {release}":"")}";
-    }
+    private void SetModelGrouping(){var selected=models.FirstOrDefault(m=>m.Id==model)??new(model,model,0,0,[]);modelKind=ModelCatalogGrouping.Category(selected);modelFamily=ModelCatalogGrouping.Family(selected);}
+    private void ModelKindChanged(ChangeEventArgs e){modelKind=e.Value?.ToString()??modelKind;var first=models.Where(m=>ModelCatalogGrouping.Category(m)==modelKind).OrderBy(m=>ModelCatalogGrouping.Family(m),StringComparer.Ordinal).ThenByDescending(m=>m.Id,StringComparer.Ordinal).FirstOrDefault();if(first is not null){modelFamily=ModelCatalogGrouping.Family(first);model=first.Id;}}
     private void ModelFamilyChanged(ChangeEventArgs e){modelFamily=e.Value?.ToString()??modelFamily;var first=FamilyModels.FirstOrDefault();if(first is not null)model=first.Id;}
-    private void ModelChanged(ChangeEventArgs e){model=e.Value?.ToString()??model;modelFamily=ModelFamily(models.FirstOrDefault(m=>m.Id==model)??new(model,model,0,0,[]));}
+    private void ModelChanged(ChangeEventArgs e){model=e.Value?.ToString()??model;SetModelGrouping();}
     private void ToggleThought(string id){if(!expandedThoughts.Add(id))expandedThoughts.Remove(id);}
     private static string ThoughtText(string partsJson)
     {

@@ -1,4 +1,5 @@
 using System.Net.Http.Json;
+using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text.Json.Serialization.Metadata;
 using GeminiNexus.Shared;
@@ -30,6 +31,13 @@ public sealed class WorkspaceClient(HttpClient http)
     {using var request=new HttpRequestMessage(method,"api/"+path){Content=JsonContent.Create(value,type)};request.Headers.Add("X-Nexus-Request","1");using var response=await http.SendAsync(request,ct);await Check(response,ct);}
     public async Task Action(HttpMethod method,string path,CancellationToken ct=default)
     {using var request=new HttpRequestMessage(method,"api/"+path);request.Headers.Add("X-Nexus-Request","1");using var response=await http.SendAsync(request,ct);await Check(response,ct);}
+    public async Task<Attachment> Upload(string name,string contentType,Stream content,CancellationToken ct=default)
+    {
+        using var form=new MultipartFormDataContent();using var file=new StreamContent(content);
+        if(MediaTypeHeaderValue.TryParse(contentType,out var mediaType))file.Headers.ContentType=mediaType;
+        form.Add(file,"file",name);using var request=new HttpRequestMessage(HttpMethod.Post,"api/files"){Content=form};request.Headers.Add("X-Nexus-Request","1");
+        using var response=await http.SendAsync(request,HttpCompletionOption.ResponseHeadersRead,ct);await Check(response,ct);return (await response.Content.ReadFromJsonAsync(NexusJson.Default.Attachment,ct))!;
+    }
     private static async Task Check(HttpResponseMessage response,CancellationToken ct)
     {
         if(response.IsSuccessStatusCode)return;

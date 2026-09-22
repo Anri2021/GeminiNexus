@@ -18,7 +18,7 @@ public static class MauiProgram
 
         builder.Services.AddMauiBlazorWebView();
         builder.Services.AddScoped(_ => new HttpClient(new HttpClientHandler { UseCookies=true, CookieContainer=new System.Net.CookieContainer(), AllowAutoRedirect=false })
-        { BaseAddress=new Uri(Preferences.Default.Get("NexusServerUrl","https://localhost/")), Timeout=Timeout.InfiniteTimeSpan });
+        { BaseAddress=new Uri(Preferences.Default.Get("NexusServerUrl","https://localhost:5000/")), Timeout=Timeout.InfiniteTimeSpan });
         builder.Services.AddScoped<WorkspaceClient>();
 #if DEBUG
 		builder.Logging.AddDebug();

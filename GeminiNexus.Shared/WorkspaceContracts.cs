@@ -20,13 +20,13 @@ public sealed record ForkRequest(string MessageId, bool Before = false);
 public sealed record Message(string Id, string ConversationId, string RunId, long Ordinal, string Role,
     string Content, string PartsJson, string CreatedAt, string Status);
 public sealed record MessagePage(Message[] Items, bool HasMore, long? NextBefore, bool HasNewer = false);
-public sealed record Attachment(string Name, string MimeType, string Data);
+public sealed record Attachment(string Name,string MimeType,string Data = "",string FileId = "",string FileUri = "",long SizeBytes = 0,string State = "active",string? ExpiresAt = null);
 public sealed record SubmitRun(string ConversationId, string Prompt, string Model, string IdempotencyKey,
     GenerationSettings Settings, Attachment[]? Attachments = null);
 public sealed record GenerationSettings
 {
     public int ContextMaxTurns { get; init; } = 20;
-    public int ContextTokenBudget { get; init; } = 24000;
+    public int ContextTokenBudget { get; init; } = 1000000;
     public int MaxOutputTokens { get; init; } = 8192;
     public double Temperature { get; init; } = 1;
     public string SystemInstruction { get; init; } = "";
@@ -72,7 +72,7 @@ public sealed record StoredRunRequest(SubmitRun Request, string ContentsJson);
 public sealed record TextDelta(string Text);
 public sealed record RunMetrics(string UsageJson, string? ModelVersion, string? FinishReason, long ElapsedMs, long? FirstTokenMs, long QueueMs);
 public sealed record RunCompletion(string Status, string? Error);
-public sealed record UploadLimit(int MaxAttachmentBytes, int MaxPromptChars);
+public sealed record UploadLimit(long MaxAttachmentBytes,int MaxPromptChars,int MaxAttachments = 10,long MaxPdfBytes = 52428800);
 public sealed record RetentionPolicy(int ConversationDays = 0,int FileDays = 0,bool DeleteArchived = false);
 public sealed record ReadinessStatus(string Status,int SchemaVersion,string DatabaseProvider,int QueuedRuns,int RunningRuns);
 public sealed record SimilarityRequest(float[] Left,float[] Right,string Backend = "auto");
@@ -96,6 +96,8 @@ public sealed record SimilarityResult(float Value,string Backend,bool OpenClAvai
 [JsonSerializable(typeof(ForkRequest))]
 [JsonSerializable(typeof(Message))]
 [JsonSerializable(typeof(MessagePage))]
+[JsonSerializable(typeof(Attachment))]
+[JsonSerializable(typeof(Attachment[]))]
 [JsonSerializable(typeof(SubmitRun))]
 [JsonSerializable(typeof(StoredRunRequest))]
 [JsonSerializable(typeof(Run))]

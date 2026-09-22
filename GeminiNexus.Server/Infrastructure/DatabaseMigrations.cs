@@ -45,6 +45,10 @@ public static class DatabaseMigrations
         CREATE TABLE IF NOT EXISTS UserEmails(UserId TEXT PRIMARY KEY, Email TEXT NOT NULL UNIQUE, FOREIGN KEY(UserId) REFERENCES NexusUsers(Id) ON DELETE CASCADE);
         CREATE TABLE IF NOT EXISTS PasswordResetTokens(TokenHash TEXT PRIMARY KEY, UserId TEXT NOT NULL, ExpiresAt BIGINT NOT NULL, UsedAt BIGINT, CreatedAt TEXT NOT NULL, FOREIGN KEY(UserId) REFERENCES NexusUsers(Id) ON DELETE CASCADE);
         CREATE INDEX IF NOT EXISTS IX_PasswordResetTokens_User ON PasswordResetTokens(UserId, ExpiresAt);
+        """),
+        (5, "provider_files", """
+        CREATE TABLE IF NOT EXISTS UserFiles(Id TEXT PRIMARY KEY, OwnerId TEXT NOT NULL, Name TEXT NOT NULL, MimeType TEXT NOT NULL, SizeBytes BIGINT NOT NULL, ProviderName TEXT NOT NULL, ProviderUri TEXT NOT NULL, State TEXT NOT NULL, ExpiresAt TEXT, CreatedAt TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS IX_UserFiles_Owner ON UserFiles(OwnerId, CreatedAt, Id);
         """)
     ];
 

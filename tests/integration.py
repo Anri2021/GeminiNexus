@@ -12,9 +12,17 @@ class Gemini(http.server.BaseHTTPRequestHandler):
     def log_message(self,*a):pass
     def response(self,data,status=200):
         body=json.dumps(data).encode();self.send_response(status);self.send_header('Content-Type','application/json');self.send_header('Content-Length',str(len(body)));self.end_headers();self.wfile.write(body)
-    def do_GET(self):self.response({'models':[{'name':'models/test-model','displayName':'מודל בדיקה','inputTokenLimit':100000,'outputTokenLimit':8000,'supportedGenerationMethods':['generateContent']}]})
+    def file(self):return {'file':{'name':'files/fixture','uri':f'http://127.0.0.1:{self.server.server_port}/v1beta/files/fixture','mimeType':'text/plain','sizeBytes':'12','state':'ACTIVE','expirationTime':'2099-01-01T00:00:00Z'}}
+    def do_GET(self):
+        if self.path.endswith('/files/fixture'):self.response(self.file());return
+        self.response({'models':[{'name':'models/test-model','displayName':'מודל בדיקה','inputTokenLimit':100000,'outputTokenLimit':8000,'supportedGenerationMethods':['generateContent']}]})
+    def do_DELETE(self):self.response({})
     def do_POST(self):
-        data=json.loads(self.rfile.read(int(self.headers.get('Content-Length',0))));Gemini.requests.append(data)
+        raw=self.rfile.read(int(self.headers.get('Content-Length',0)))
+        if self.path.endswith('/upload/v1beta/files'):
+            self.send_response(200);self.send_header('X-Goog-Upload-URL',f'http://127.0.0.1:{self.server.server_port}/upload/session');self.send_header('Content-Length','2');self.end_headers();self.wfile.write(b'{}');return
+        if self.path.endswith('/upload/session'):self.response(self.file());return
+        data=json.loads(raw);Gemini.requests.append(data)
         if ':countTokens' in self.path:self.response({'totalTokens':len(json.dumps(data))//4});return
         if self.path.endswith('/interactions'):
             self.response({'name':'interactions/fixture','status':'completed'});return
@@ -48,6 +56,13 @@ class Client:
             try:body=json.loads(body)
             except ValueError:body=body.decode()
             return e.code,body
+    def upload(self,name='fixture.txt',mime='text/plain',data=b'hello files'):
+        boundary='----nexus'+uuid.uuid4().hex
+        body=(f'--{boundary}\r\nContent-Disposition: form-data; name="file"; filename="{name}"\r\nContent-Type: {mime}\r\n\r\n').encode()+data+f'\r\n--{boundary}--\r\n'.encode()
+        request=urllib.request.Request(self.url+'/api/files',data=body,headers={'Content-Type':f'multipart/form-data; boundary={boundary}','X-Nexus-Request':'1'},method='POST')
+        try:
+            with self.opener.open(request,timeout=20) as response:return response.status,json.loads(response.read())
+        except urllib.error.HTTPError as e:return e.code,json.loads(e.read())
 class Contracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -73,8 +88,8 @@ class Contracts(unittest.TestCase):
         cls.process.terminate();cls.process.wait(timeout=20);cls.log.close();cls.mock.shutdown();cls.temp.cleanup()
     def conversation(self):
         status,c=self.admin.call('/api/conversations','POST',{'title':'שיחה חדשה','model':'test-model'});self.assertEqual(status,201,c);return c
-    def submit(self,c,prompt='hello',key=None):
-        return self.admin.call('/api/runs','POST',{'conversationId':c['id'],'prompt':prompt,'model':'test-model','idempotencyKey':key or uuid.uuid4().hex,'settings':{'contextMaxTurns':10,'contextTokenBudget':24000,'maxOutputTokens':1000,'temperature':1,'systemInstruction':'Be helpful','advancedJson':'{}'}})
+    def submit(self,c,prompt='hello',key=None,attachments=None):
+        return self.admin.call('/api/runs','POST',{'conversationId':c['id'],'prompt':prompt,'model':'test-model','idempotencyKey':key or uuid.uuid4().hex,'settings':{'contextMaxTurns':10,'contextTokenBudget':24000,'maxOutputTokens':1000,'temperature':1,'systemInstruction':'Be helpful','advancedJson':'{}'},'attachments':attachments})
     def wait(self,run):
         for _ in range(150):
             status,r=self.admin.call('/api/runs/'+run['id']);self.assertEqual(status,200)
@@ -99,6 +114,16 @@ class Contracts(unittest.TestCase):
     def test_03_ownership(self):
         c=self.conversation();_,r=self.submit(c);self.wait(r)
         for path in [f"/api/conversations/{c['id']}/messages",f"/api/runs/{r['id']}",f"/api/runs/{r['id']}/events?format=json",f"/api/runs/{r['id']}/metrics"]:self.assertEqual(self.other.call(path)[0],404,path)
+    def test_03b_file_upload_reference_and_ownership(self):
+        status,file=self.admin.upload();self.assertEqual(status,201,file);self.assertEqual(file['sizeBytes'],11);self.assertEqual(file['data'],'')
+        self.assertEqual(self.admin.call('/api/files')[1][0]['fileId'],file['fileId']);self.assertEqual(self.other.call('/api/files')[1],[])
+        c=self.conversation();status,run=self.submit(c,'read file',attachments=[file]);self.assertEqual(status,202,run);self.assertEqual(self.wait(run)['status'],'completed')
+        request=next(item for item in reversed(Gemini.requests) if item.get('contents') and item['contents'][-1]['parts'][0].get('text')=='read file')
+        self.assertEqual(request['contents'][-1]['parts'][1]['fileData']['fileUri'],file['fileUri'])
+        other_conversation=self.other.call('/api/conversations','POST',{'title':'other','model':'test-model'})[1]
+        payload={'conversationId':other_conversation['id'],'prompt':'steal','model':'test-model','idempotencyKey':uuid.uuid4().hex,'settings':{'contextMaxTurns':10,'contextTokenBudget':24000,'maxOutputTokens':1000,'temperature':1,'systemInstruction':'','advancedJson':'{}'},'attachments':[file]}
+        self.assertEqual(self.other.call('/api/runs','POST',payload)[0],404)
+        self.assertEqual(self.admin.call('/api/files/'+file['fileId'],'DELETE')[0],204)
     def test_04_idempotency_parallel_and_cancel(self):
         c=self.conversation();key=uuid.uuid4().hex;_,r=self.submit(c,'SLOW',key);_,same=self.submit(c,'SLOW',key);self.assertEqual(same['id'],r['id']);self.assertEqual(self.submit(c,'other')[0],409)
         self.assertEqual(self.submit(c,'changed request',key)[0],409)
@@ -170,7 +195,7 @@ class Contracts(unittest.TestCase):
     def test_11_migrations_provider_operations_and_tools(self):
         with sqlite3.connect(self.temp.name+'/nexus.db') as db:
             versions=[row[0] for row in db.execute('SELECT Version FROM SchemaMigrations ORDER BY Version')]
-        self.assertEqual(versions,[1,2,3,4])
+        self.assertEqual(versions,[1,2,3,4,5])
         status,catalog=self.admin.call('/api/provider/capabilities');self.assertEqual(status,200);self.assertTrue(any(x['id']=='live' and x['realtime'] for x in catalog['items']))
         status,operation=self.admin.call('/api/provider/operations','POST',{'capability':'interactions','method':'POST','resource':'interactions','body':'{"input":"hello"}'})
         self.assertEqual(status,201,operation);self.assertEqual(operation['status'],'completed')
@@ -185,7 +210,7 @@ class Contracts(unittest.TestCase):
         status,installed=self.admin.call('/api/plugins/packages','POST',package);self.assertEqual(status,201,installed);self.assertEqual(installed['packageHash'],__import__('hashlib').sha256(b'\0asm\x01\0\0\0').hexdigest().upper())
         with sqlite3.connect(self.temp.name+'/nexus.db') as db:self.assertEqual(db.execute('SELECT COUNT(*) FROM PluginPackages WHERE Id=?',('fixture-wasi',)).fetchone()[0],1)
         self.assertEqual(self.admin.call('/api/plugins/fixture-wasi','DELETE')[0],204)
-        status,ready=Client(self.url).call('/health/ready');self.assertEqual(status,200);self.assertEqual(ready['schemaVersion'],4)
+        status,ready=Client(self.url).call('/health/ready');self.assertEqual(status,200);self.assertEqual(ready['schemaVersion'],5)
         self.assertEqual(self.admin.call('/api/retention','PUT',{'conversationDays':30,'fileDays':7,'deleteArchived':True})[0],204);self.assertEqual(self.admin.call('/api/retention')[1]['conversationDays'],30)
         status,similarity=self.admin.call('/api/local/similarity','POST',{'left':[1,2,3,4],'right':[2,3,4,5],'backend':'native'});self.assertEqual(status,200,similarity);self.assertAlmostEqual(similarity['value'],40)
     def test_99_login_rate_limit_is_independent(self):

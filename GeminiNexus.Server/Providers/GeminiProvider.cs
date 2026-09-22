@@ -112,7 +112,7 @@ public sealed partial class GeminiProvider(IHttpClientFactory factory,ServerOpti
     internal static void ApplyThinkingConfig(JsonObject generation,string model,GenerationSettings settings)
     {
         if(!model.StartsWith("gemini-3",StringComparison.OrdinalIgnoreCase)&&!model.StartsWith("gemini-2.5",StringComparison.OrdinalIgnoreCase)){generation.Remove("thinkingConfig");return;}
-        var thinking=new JsonObject{{"includeThoughts",settings.IncludeThoughts}};var level=settings.ThinkingLevel.ToLowerInvariant();
+        var thinking=new JsonObject{{"includeThoughts",settings.IncludeThoughts}};var level=(settings.ThinkingLevel??"medium").ToLowerInvariant();
         if(model.StartsWith("gemini-3",StringComparison.OrdinalIgnoreCase))
         {
             if(level=="minimal"&&(model.StartsWith("gemini-3.8",StringComparison.OrdinalIgnoreCase)||model.StartsWith("gemini-3.7",StringComparison.OrdinalIgnoreCase)||model.StartsWith("gemini-3.1-pro",StringComparison.OrdinalIgnoreCase)))level="low";

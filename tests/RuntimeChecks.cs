@@ -54,7 +54,7 @@ await using(var renderer=new HtmlRenderer(services,services.GetRequiredService<I
     {
         var output=await renderer.RenderComponentAsync<GeminiNexus.UI.Pages.Workspace>();
         var markup=output.ToHtmlString();Check(markup.Contains("nexus-app")&&markup.Contains("composer")&&markup.Contains("sidebar"),"Real workspace Razor renders");
-        Check(markup.Contains("משפחת מודל")&&markup.Contains("גרסת מודל")&&markup.Contains("run-options"),"Model family, version, and thinking controls render");
+        Check(markup.Contains("model-family")&&markup.Contains("model-version")&&markup.Contains("run-options"),"Model family, version, and thinking controls render");
         if(args.Length>0)
         {
             var directory=Path.Combine(args[0],"artifacts","checks");Directory.CreateDirectory(directory);

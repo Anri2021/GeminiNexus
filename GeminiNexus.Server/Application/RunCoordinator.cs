@@ -59,11 +59,12 @@ public sealed partial class RunCoordinator(WorkspaceStore store,IChatProvider pr
                         if(metadata.RootElement.TryGetProperty("usageMetadata",out var report))foreach(var field in report.EnumerateObject())usage[field.Name]=JsonNode.Parse(field.Value.GetRawText());
                         if(metadata.RootElement.TryGetProperty("modelVersion",out var version))modelVersion=version.GetString();
                     }
-                    if(chunk.Text.Length>0)firstTokenMs??=started.ElapsedMilliseconds;
+                    if(chunk.Text.Length>0||chunk.ThoughtText.Length>0)firstTokenMs??=started.ElapsedMilliseconds;
                     finishReason=chunk.FinishReason??finishReason;
                     traceBytes+=Encoding.UTF8.GetByteCount(chunk.RawJson);
                     if(traceBytes>options.MaxTraceBytes||text.Length+chunk.Text.Length>options.MaxResponseChars)throw new InvalidOperationException("הפלט הגיע למגבלת הזיכרון או הדיבאג שהוגדרה בשרת");
                     await store.Append(run.Id,worker,"provider",TraceRedactor.Redact(chunk.RawJson,options.ApiKey),cancel.Token);
+                    if(chunk.ThoughtText.Length>0)await store.Append(run.Id,worker,"thought",JsonSerializer.Serialize(new ThoughtDelta(chunk.ThoughtText),NexusJson.Default.ThoughtDelta),cancel.Token);
                     if(chunk.Text.Length>0){text.Append(chunk.Text);await store.Append(run.Id,worker,"delta",JsonSerializer.Serialize(new TextDelta(chunk.Text),NexusJson.Default.TextDelta),cancel.Token);}
                     foreach(var part in JsonNode.Parse(chunk.PartsJson)!.AsArray()){var copy=part?.DeepClone();parts.Add(copy);roundParts.Add(part?.DeepClone());}
                     if(chunk.FinishReason is not null){finished=true;if(chunk.FinishReason!="STOP"){status=chunk.FinishReason=="MAX_TOKENS"?"truncated":"blocked";error=chunk.FinishReason;}}

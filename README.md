@@ -13,6 +13,7 @@
 - עד עשרה קבצים בקלט: העלאה זורמת ל־Gemini Files API, עד 100MB לקובץ ועד 50MB ל־PDF, שמירת הפניה לפי משתמש ובדיקת בעלות בכל שליחה. קלט inlineData ישן עדיין נתמך לתאימות.
 - תוספי פרומפט דטרמיניסטיים: prefix, suffix, system, replace. הגדרות מסונכרנות, וביצוע בשרת או בלקוח.
 - מתאם generateContent, קטלוג מודלים וספירת טוקנים רשמית הכוללת הוראות מערכת וכלים. מעבדת API למנהל עבור בקשות JSON חד־פעמיות.
+- סרגל השיחה מחלק את קטלוג המודלים למשפחה ולגרסה, ומציע רמת חשיבה אוטומטית, מינימלית, נמוכה, בינונית או גבוהה. ההגדרה מתורגמת ל־`thinkingLevel` ב־Gemini 3 ול־`thinkingBudget` ב־Gemini 2.5. כאשר המודל מחזיר תקציר חשיבה, הכוכב הכחול מציג וממזער אותו בלי לערבב אותו בתשובה הרגילה.
 - מסך יכולות ופעולות שמורות עבור Interactions,‏ Embeddings,‏ Batch,‏ Files,‏ Cache,‏ Media ו־Operations, וכן שער WebSocket מאומת ומוגבל ל־Live API. העלאת קובץ מרוחק משתמשת בפרוטוקול resumable בלי לחשוף את מפתח הספק ללקוח.
 - קריאות כלים רב־סבביות עם כלים מובנים וחבילות WASI מבודדות בתהליך `wasmtime`. ה־manifest, ההרשאות, הגרסה, hash החבילה ותוצאות ההפעלה נשמרים במסד הנתונים.
 - הגירות סכימה ממוספרות, נעילת הגירה ב־PostgreSQL, תביעת עבודות עם `SKIP LOCKED` ונעילות advisory לריבוי מופעים. קיימת בדיקת קבלה ייעודית לשני שרתים מול PostgreSQL.
@@ -98,7 +99,9 @@ python3 tests/load.py
 
 היסטוריית הודעות אינה נמחקת כשמפנים את באפר הלקוח. אירועי הדיבאג כפופים ל־`Limits:TraceRetentionDays`; זרם אירועים שכבר נמחק נסגר באופן תקין. השדות הגולמיים משמרים מידע שהספק מחזיר, לאחר השחרת שדות סוד מוכרים; אין גישה למידע שהספק לא חשף.
 
-מקורות: [API של Google](https://ai.google.dev/api/generate-content), [תיעוד Caddy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).
+מפת הפיצ׳רים המומלצת להמשך נמצאת ב־[`docs/GEMINI_FEATURE_ROADMAP.md`](docs/GEMINI_FEATURE_ROADMAP.md).
+
+מקורות: [API של Google](https://ai.google.dev/api/generate-content), [תיעוד החשיבה של Gemini](https://ai.google.dev/gemini-api/docs/thinking), [תיעוד Caddy](https://caddyserver.com/docs/caddyfile/directives/reverse_proxy).
 
 ## 5. אימות השינויים
 
